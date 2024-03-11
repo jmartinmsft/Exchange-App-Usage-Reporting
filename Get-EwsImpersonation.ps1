@@ -22,19 +22,47 @@
     SOFTWARE
 #>
 
-# Version 24.03.10.1409
+# Version 24.03.11.0955
 
 param(
-    [Parameter(Mandatory=$true, Position=1, HelpMessage="The Api parameter specifies which API Permisions to export for esach Application registration")] [ValidateSet('OutlookRESTv2','EWS')] [string]$Api,
-    [Parameter(Mandatory=$false, HelpMessage="The PermissionType parameter specifies whether the app registrations uses delegated or application permissions")] [ValidateSet('Application','Delegated')] [string]$PermissionType,
-    [Parameter(Mandatory=$false, HelpMessage="The OAuthClientId parameter specifies the the app ID for the OAuth token request.")] [string] $OAuthClientId,
-    [Parameter(Mandatory=$false, HelpMessage="The OAuthClientSecret parameter specifies the the app secret for the OAuth token request.")] [securestring] $OAuthClientSecret,
-    [Parameter(Mandatory=$false, HelpMessage="The OAuthTenantId parameter specifies the the tenant ID for the OAuth token request.")] [string] $OAuthTenantId,
-    [Parameter(Mandatory=$False,HelpMessage="The OAuthRedirectUri specifies the redirect Uri of the Azure registered application.")] [string] $OAuthRedirectUri = "https://login.microsoftonline.com/common/oauth2/nativeclient",
-    [Parameter(Mandatory=$False,HelpMessage="The OAuthCertificate parameter is the certificate for the registerd application.")] $OAuthCertificate = $null,
-    [Parameter(Mandatory=$False,HelpMessage="The CertificateStore parameter specifies the certificate store where the certificate is loaded.")] [ValidateSet("CurrentUser", "LocalMachine")] [string] $CertificateStore = $null,
-    [ValidateScript({ Test-Path $_ })] [Parameter(Mandatory = $true, HelpMessage="The OutputPath parameter specifies the path for the EWS usage report.")] [string] $OutputPath,
-    [Parameter(Mandatory=$false, HelpMessage="The NumberOfDays parameter specifies how many days of sign-in logs to query (default is three).")] [int] $NumberOfDays=1
+    [Parameter(Mandatory=$true, Position=1, HelpMessage="The Api parameter specifies which API Permisions to export for esach Application registration")]
+    [ValidateSet('OutlookRESTv2','EWS')]
+    [string]$Api,
+
+    [Parameter(Mandatory=$false, HelpMessage="The PermissionType parameter specifies whether the app registrations uses delegated or application permissions")]
+    [ValidateSet('Application','Delegated')]
+    [string]$PermissionType,
+
+    [Parameter(Mandatory=$false, HelpMessage="The OAuthClientId parameter specifies the the app ID for the OAuth token request.")]
+    [string] $OAuthClientId,
+
+    [Parameter(Mandatory=$false, HelpMessage="The OAuthClientSecret parameter specifies the the app secret for the OAuth token request.")]
+    [securestring] $OAuthClientSecret,
+
+    [Parameter(Mandatory=$false, HelpMessage="The OAuthTenantId parameter specifies the the tenant ID for the OAuth token request.")]
+    [string] $OAuthTenantId,
+
+    [Parameter(Mandatory=$False,HelpMessage="The OAuthRedirectUri specifies the redirect Uri of the Azure registered application.")]
+    [string] $OAuthRedirectUri = "https://login.microsoftonline.com/common/oauth2/nativeclient",
+
+    [Parameter(Mandatory=$False,HelpMessage="The OAuthCertificate parameter is the certificate for the registerd application.")]
+    [string] $OAuthCertificate = $null,
+
+    [Parameter(Mandatory=$False,HelpMessage="The CertificateStore parameter specifies the certificate store where the certificate is loaded.")]
+    [ValidateSet("CurrentUser", "LocalMachine")]
+    [string] $CertificateStore = $null,
+
+    [ValidateScript({ Test-Path $_ })]
+    [Parameter(Mandatory = $true, HelpMessage="The OutputPath parameter specifies the path for the EWS usage report.")]
+    [string] $OutputPath,
+
+    [Parameter(Mandatory=$false, HelpMessage="The NumberOfDays parameter specifies how many days of sign-in logs to query (default is three).")]
+    [int] $NumberOfDays=1,
+
+    [ValidateSet("Global", "USGovernmentL4", "USGovernmentL5", "ChinaCloud")]
+    [Parameter(Mandatory = $false)]
+    [string]$AzureEnvironment = "Global"
+
     #[Parameter(Mandatory=$False,HelpMessage="The ImpersonationCheck parameter is a switch that enables checking accounts with EWS impersonation rights.")][switch]$ImpersonationCheck
 )
 
@@ -583,10 +611,8 @@ function CheckTokenExpiry {
             exit
         }
         Write-Host "Obtained a new token" -ForegroundColor Green
-        #$Token.Value = $oAuthReturnObject.OAuthToken
         $Script:GraphToken = $oAuthReturnObject.OAuthToken
         $script:tokenLastRefreshTime = $oAuthReturnObject.LastTokenRefreshTime
-        #$Script:Token = $oAuthReturnObject.OAuthToken.access_token
         return $oAuthReturnObject.OAuthToken.access_token
     }
     else {
@@ -648,67 +674,297 @@ function TestInstalledModules {
     }
 }
 
-function SendGraphRequest{
+function Invoke-GraphApiRequest {
+    [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$true, HelpMessage="The Uri parameter specifies the request uri.")] [string] $Uri,
-        [Parameter(Mandatory=$false, HelpMessage="The HttpMethod parameter specifies the method for the request.")] [string] $HttpMethod="GET"
+        [Parameter(Mandatory = $true)]
+        [string]$Query,
+
+        [ValidateSet("v1.0", "beta")]
+        [Parameter(Mandatory = $false)]
+        [string]$Endpoint = "v1.0",
+
+        [Parameter(Mandatory = $false)]
+        [string]$Method = "GET",
+
+        [Parameter(Mandatory = $false)]
+        [string]$ContentType = "application/json",
+
+        [Parameter(Mandatory = $false)]
+        [string]$Body,
+
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern("^([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_\-\+\/=]*)")]
+        [string]$AccessToken,
+
+        [Parameter(Mandatory = $false)]
+        [int]$ExpectedStatusCode = 200,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GraphApiUrl
     )
-    # if token is going to expire in next 5 min then refresh it
-    Write-Verbose "Checking age of OAuth token before sending the request."
-    $Script:Token = CheckTokenExpiry -Token ([ref]$Script:GraphToken) -ApplicationInfo $applicationInfo -AzureADEndpoint $azureADEndpoint -AuthScope $Script:Scope
-   
-    $Headers = @{
-        'Content-Type'  = "application\json"
-        'Authorization' = "Bearer $Script:Token"
+
+    <#
+        This shared function is used to make requests to the Microsoft Graph API.
+        It returns a PSCustomObject with the following properties:
+            Content: The content of the response (converted from JSON to a PSCustomObject)
+            Response: The full response object
+            StatusCode: The status code of the response
+            Successful: A boolean indicating whether the request was successful
+    #>
+
+    begin {
+        Write-Verbose "Calling $($MyInvocation.MyCommand)"
+        $successful = $false
+        $content = $null
+    }
+    process {
+        $graphApiRequestParams = @{
+            Uri             = "$GraphApiUrl/$Endpoint/$($Query.TrimStart("/"))"
+            Header          = @{ Authorization = "Bearer $AccessToken" }
+            Method          = $Method
+            ContentType     = $ContentType
+            UseBasicParsing = $true
+            ErrorAction     = "Stop"
+        }
+
+        if (-not([System.String]::IsNullOrEmpty($Body))) {
+            Write-Verbose "Body: $Body"
+            $graphApiRequestParams.Add("Body", $Body)
+        }
+
+        Write-Verbose "Graph API uri called: $($graphApiRequestParams.Uri)"
+        Write-Verbose "Method: $($graphApiRequestParams.Method) ContentType: $($graphApiRequestParams.ContentType)"
+        $graphApiResponse = Invoke-WebRequestWithProxyDetection -ParametersObject $graphApiRequestParams
+
+        if (($null -eq $graphApiResponse) -or
+            ([System.String]::IsNullOrEmpty($graphApiResponse.StatusCode))) {
+            Write-Verbose "Graph API request failed - no response"
+        } elseif ($graphApiResponse.StatusCode -ne $ExpectedStatusCode) {
+            Write-Verbose "Graph API status code: $($graphApiResponse.StatusCode) does not match expected status code: $ExpectedStatusCode"
+        } else {
+            Write-Verbose "Graph API request successful"
+            $successful = $true
+            $content = $graphApiResponse.Content | ConvertFrom-Json
+        }
+    }
+    end {
+        return [PSCustomObject]@{
+            Content    = $content
+            Response   = $graphApiResponse
+            StatusCode = $graphApiResponse.StatusCode
+            Successful = $successful
+        }
+    }
+}
+
+function Invoke-WebRequestWithProxyDetection {
+    [CmdletBinding(DefaultParameterSetName = "Default")]
+    param (
+        [Parameter(Mandatory = $true, ParameterSetName = "Default")]
+        [string]
+        $Uri,
+
+        [Parameter(Mandatory = $false, ParameterSetName = "Default")]
+        [switch]
+        $UseBasicParsing,
+
+        [Parameter(Mandatory = $true, ParameterSetName = "ParametersObject")]
+        [hashtable]
+        $ParametersObject,
+
+        [Parameter(Mandatory = $false, ParameterSetName = "Default")]
+        [string]
+        $OutFile
+    )
+
+    Write-Verbose "Calling $($MyInvocation.MyCommand)"
+    if ([System.String]::IsNullOrEmpty($Uri)) {
+        $Uri = $ParametersObject.Uri
     }
 
-    $MessageParams = @{
-        "URI"         = $Uri
-        "Headers"     = $Headers
-        "Method"      = $HttpMethod
-        "ContentType" = "application/json"
-        "UseBasicParsing" = $null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    if (Confirm-ProxyServer -TargetUri $Uri) {
+        $webClient = New-Object System.Net.WebClient
+        $webClient.Headers.Add("User-Agent", "PowerShell")
+        $webClient.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+    }
+
+    if ($null -eq $ParametersObject) {
+        $params = @{
+            Uri     = $Uri
+            OutFile = $OutFile
         }
 
-    $Results = ""
-        $StatusCode = ""
-        # Send the request and look for either throttling or timeout errors
-        do {
-            try {
-                $Results = Invoke-RestMethod @Messageparams
-                $StatusCode = $Results.StatusCode
+        if ($UseBasicParsing) {
+            $params.UseBasicParsing = $true
+        }
+    } else {
+        $params = $ParametersObject
+    }
+
+    try {
+        Invoke-WebRequest @params
+    } catch {
+        Write-VerboseErrorInformation
+    }
+}
+
+function Confirm-ProxyServer {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]
+        $TargetUri
+    )
+
+    Write-Verbose "Calling $($MyInvocation.MyCommand)"
+    try {
+        $proxyObject = ([System.Net.WebRequest]::GetSystemWebProxy()).GetProxy($TargetUri)
+        if ($TargetUri -ne $proxyObject.OriginalString) {
+            Write-Verbose "Proxy server configuration detected"
+            Write-Verbose $proxyObject.OriginalString
+            return $true
+        } else {
+            Write-Verbose "No proxy server configuration detected"
+            return $false
+        }
+    } catch {
+        Write-Verbose "Unable to check for proxy server configuration"
+        return $false
+    }
+}
+
+function WriteErrorInformationBase {
+    [CmdletBinding()]
+    param(
+        [object]$CurrentError = $Error[0],
+        [ValidateSet("Write-Host", "Write-Verbose")]
+        [string]$Cmdlet
+    )
+
+    if ($null -ne $CurrentError.OriginInfo) {
+        & $Cmdlet "Error Origin Info: $($CurrentError.OriginInfo.ToString())"
+    }
+
+    & $Cmdlet "$($CurrentError.CategoryInfo.Activity) : $($CurrentError.ToString())"
+
+    if ($null -ne $CurrentError.Exception -and
+        $null -ne $CurrentError.Exception.StackTrace) {
+        & $Cmdlet "Inner Exception: $($CurrentError.Exception.StackTrace)"
+    } elseif ($null -ne $CurrentError.Exception) {
+        & $Cmdlet "Inner Exception: $($CurrentError.Exception)"
+    }
+
+    if ($null -ne $CurrentError.InvocationInfo.PositionMessage) {
+        & $Cmdlet "Position Message: $($CurrentError.InvocationInfo.PositionMessage)"
+    }
+
+    if ($null -ne $CurrentError.Exception.SerializedRemoteInvocationInfo.PositionMessage) {
+        & $Cmdlet "Remote Position Message: $($CurrentError.Exception.SerializedRemoteInvocationInfo.PositionMessage)"
+    }
+
+    if ($null -ne $CurrentError.ScriptStackTrace) {
+        & $Cmdlet "Script Stack: $($CurrentError.ScriptStackTrace)"
+    }
+}
+
+function Write-VerboseErrorInformation {
+    [CmdletBinding()]
+    param(
+        [object]$CurrentError = $Error[0]
+    )
+    WriteErrorInformationBase $CurrentError "Write-Verbose"
+}
+
+function Write-HostErrorInformation {
+    [CmdletBinding()]
+    param(
+        [object]$CurrentError = $Error[0]
+    )
+    WriteErrorInformationBase $CurrentError "Write-Host"
+}
+
+function Get-CloudServiceEndpoint {
+    [CmdletBinding()]
+    param(
+        [string]$EndpointName
+    )
+
+    <#
+        This shared function is used to get the endpoints for the Azure and Microsoft 365 services.
+        It returns a PSCustomObject with the following properties:
+            GraphApiEndpoint: The endpoint for the Microsoft Graph API
+            ExchangeOnlineEndpoint: The endpoint for Exchange Online
+            AutoDiscoverSecureName: The endpoint for Autodiscover
+            AzureADEndpoint: The endpoint for Azure Active Directory
+            EnvironmentName: The name of the Azure environment
+    #>
+
+    begin {
+        Write-Verbose "Calling $($MyInvocation.MyCommand)"
+    }
+    process {
+        # https://learn.microsoft.com/graph/deployments#microsoft-graph-and-graph-explorer-service-root-endpoints
+        switch ($EndpointName) {
+            "Global" {
+                $environmentName = "AzureCloud"
+                $graphApiEndpoint = "https://graph.microsoft.com"
+                $exchangeOnlineEndpoint = "https://outlook.office.com"
+                $autodiscoverSecureName = "https://autodiscover-s.outlook.com"
+                $azureADEndpoint = "https://login.microsoftonline.com"
+                break
             }
-            catch {
-                $StatusCode = $_.Exception.Response.StatusCode.value__
-                if ($StatusCode -eq 429) {
-                    Write-Warning "Request being throttled. Sleeping for 50 seconds..."
-                    Start-Sleep -Seconds 50
-                }
-                elseif ($StatusCode -eq 504) {
-                    Write-Warning "Request received timeout error. Retrying in 20 seconds..."
-                    Start-Sleep -Seconds 20
-                }
-                else {
-                    Write-Error $_.Exception
-                }
+            "USGovernmentL4" {
+                $environmentName = "AzureUSGovernment"
+                $graphApiEndpoint = "https://graph.microsoft.us"
+                $exchangeOnlineEndpoint = "https://outlook.office365.us"
+                $autodiscoverSecureName = "https://autodiscover-s.office365.us"
+                $azureADEndpoint = "https://login.microsoftonline.us"
+                break
+            }
+            "USGovernmentL5" {
+                $environmentName = "AzureUSGovernment"
+                $graphApiEndpoint = "https://dod-graph.microsoft.us"
+                $exchangeOnlineEndpoint = "https://outlook-dod.office365.us"
+                $autodiscoverSecureName = "https://autodiscover-s-dod.office365.us"
+                $azureADEndpoint = "https://login.microsoftonline.us"
+                break
+            }
+            "ChinaCloud" {
+                $environmentName = "AzureChinaCloud"
+                $graphApiEndpoint = "https://microsoftgraph.chinacloudapi.cn"
+                $exchangeOnlineEndpoint = "https://partner.outlook.cn"
+                $autodiscoverSecureName = "https://autodiscover-s.partner.outlook.cn"
+                $azureADEndpoint = "https://login.partner.microsoftonline.cn"
+                break
             }
         }
-        while ($StatusCode -eq 429)
-        return $Results
-
+    }
+    end {
+        return [PSCustomObject]@{
+            EnvironmentName        = $environmentName
+            GraphApiEndpoint       = $graphApiEndpoint
+            ExchangeOnlineEndpoint = $exchangeOnlineEndpoint
+            AutoDiscoverSecureName = $autodiscoverSecureName
+            AzureADEndpoint        = $azureADEndpoint
+        }
+    }
 }
 
 function GetAzureAdApplications{
     Write-Host "Getting a list of Entra App registrations..." -ForegroundColor Green
     $Script:AadApplications = New-Object System.Collections.ArrayList
-    $AadApplicationResults = SendGraphRequest -Uri "https://graph.microsoft.com/v1.0/applications?`$select=appId,createdDateTime,displayName,description,notes,requiredResourceAccess"
-    foreach($application in $AadApplicationResults.Value){
+    $AadApplicationResults = Invoke-GraphApiRequest -Query "applications?`$select=appId,createdDateTime,displayName,description,notes,requiredResourceAccess" -AccessToken $Script:Token -GraphApiUrl $cloudService.graphApiEndpoint
+    foreach($application in $AadApplicationResults.Content.Value){
         $Script:AadApplications.Add($application) | Out-Null
     }
     # Check if response includes more results link
-    while($null -ne $AadApplicationResults.'@odata.nextLink'){
-        $AadApplicationResults = SendGraphRequest -Uri $AadApplicationResults.'@odata.nextLink'
-        foreach($application in $AadApplicationResults.Value){
+    while($null -ne $AadApplicationResults.Content.'@odata.nextLink') {
+        $Query = $AadApplicationResults.Content.'@odata.nextLink'.Substring($AadApplicationResults.Content.'@odata.nextLink'.IndexOf("applications"))
+        $AadApplicationResults = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $cloudService.graphApiEndpoint
+        foreach($application in $AadApplicationResults.Content.Value) {
             $Script:AadApplications.Add($application) | Out-Null
         }
     }
@@ -718,14 +974,15 @@ function GetAzureAdApplications{
 function GetAzureAdServicePrincipals{
     Write-Host "Getting a list of all Entra service applications..." -ForegroundColor Green
     $Script:ServicePrincipals = New-Object System.Collections.ArrayList
-    $ServicePrincipalsResults = SendGraphRequest -Uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$select=id,appDisplayName,appDescription,appId,createdDateTime,displayName,servicePrincipalType,appRoles,oauth2PermissionScopes"
-    foreach($ServicePrincipal in $ServicePrincipalsResults.Value){
+    $ServicePrincipalsResults = Invoke-GraphApiRequest -Query "servicePrincipals?`$select=id,appDisplayName,appDescription,appId,createdDateTime,displayName,servicePrincipalType,appRoles,oauth2PermissionScopes" -AccessToken $Script:Token -GraphApiUrl $cloudService.graphApiEndpoint
+    foreach($ServicePrincipal in $ServicePrincipalsResults.Content.Value) {
         $Script:ServicePrincipals.Add($ServicePrincipal) | Out-Null
     }
     # Check if response includes more results link
-    while($null -ne $ServicePrincipalsResults.'@odata.nextLink'){
-        $ServicePrincipalsResults = SendGraphRequest -Uri $ServicePrincipalsResults.'@odata.nextLink'
-        foreach($ServicePrincipal in $ServicePrincipalsResults.Value){
+    while($null -ne $ServicePrincipalsResults.Content.'@odata.nextLink') {
+        $Query = $ServicePrincipalsResults.Content.'@odata.nextLink'.Substring($ServicePrincipalsResults.Content.'@odata.nextLink'.IndexOf("servicePrincipals"))
+        $ServicePrincipalsResults = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $cloudService.graphApiEndpoint
+        foreach($ServicePrincipal in $ServicePrincipalsResults.Content.Value){
             $Script:ServicePrincipals.Add($ServicePrincipal) | Out-Null
         }
     }
@@ -819,8 +1076,9 @@ function GetEwsSignIns{
     Write-Host "Searching for sign-in events for the $($Api) API..." -ForegroundColor Green
     foreach($App in $ApplicationPermissions) {
         Write-Progress -Activity "Searching for EWS sign-in attempts" -Status "Checking $($App.ApplicationDisplayName)" -PercentComplete ((($AppsCompleted)/$NumberOfApps)*100)
-        $SignIns = SendGraphRequest -Uri "https://graph.microsoft.com/beta/auditLogs/signIns?`$filter=appid eq '$($App.ApplicationId)' and signInEventTypes/any(t: t eq 'interactiveUser' or t eq 'nonInteractiveUser' or t eq 'servicePrincipal' or t eq 'managedIdentity') and CreatedDateTime ge $SearchStartDate"
-        $SignIns.value | Select-Object id, createdDateTime, appId, appDisplayName, correlationId, clientCredentialType, resourceDisplayName, resourceId, servicePrincipalId , userDisplayName, userPrincipalName, @{Name='SignInEventTypes';Expression={$_.signInEventTypes -join '; ' } } | Export-Csv -Path $ApiSignInsFile -NoTypeInformation -NoClobber -Append
+        $Query = "auditLogs/signIns?`$filter=appid eq '$($App.ApplicationId)' and signInEventTypes/any(t: t eq 'interactiveUser' or t eq 'nonInteractiveUser' or t eq 'servicePrincipal' or t eq 'managedIdentity') and CreatedDateTime ge $SearchStartDate"
+        $SignIns = Invoke-GraphApiRequest -Query $Query -Endpoint beta -AccessToken $Script:Token -GraphApiUrl $cloudService.graphApiEndpoint
+        $SignIns.Content.Value | Select-Object id, createdDateTime, appId, appDisplayName, correlationId, clientCredentialType, resourceDisplayName, resourceId, servicePrincipalId , userDisplayName, userPrincipalName, @{Name='SignInEventTypes';Expression={$_.signInEventTypes -join '; ' } } | Export-Csv -Path $ApiSignInsFile -NoTypeInformation -NoClobber -Append
         $AppsCompleted++
     }
 }
@@ -840,7 +1098,6 @@ SetWriteVerboseAction ${Function:Write-VerboseLog}
 SetWriteWarningAction ${Function:Write-HostLog}
 
 #Define variables
-$Script:Scope = "https://graph.microsoft.com/.default"
 $Script:EWSPermissions = @("EWS.AccessAsUser.All", "full_access_as_app")
 $Script:Delegated_OutlookRESTPermissions = @("PeopleSettings.Read.All", "PeopleSettings.ReadWrite.All", "ReportingWebService.Read", "Organization.ReadWrite.All",
     "Organization.Read.All", "Mail.ReadBasic", "Notes.Read", "Notes.ReadWrite", "User.Read.All", "User.ReadBasic.All", "MailboxSettings.Read", "Calendars.Read.Shared",
@@ -854,12 +1111,15 @@ $Script:Application_OutlookRESTPermissions = @("PeopleSettings.ReadWrite.All", "
     "Contacts.ReadWrite", "MailboxSettings.ReadWrite", "Tasks.Read", "Tasks.ReadWrite", "Calendars.ReadWrite.All", "Calendars.Read.All", "Place.Read.All")
 
 # Call function to confirm required PowerShell module(s) are installed
-TestInstalledModules
+if($PermissionType -eq "Delegated") {
+    TestInstalledModules
+}
 
 # Call function to obtain OAuth token
-$azureADEndpoint = "https://login.microsoftonline.com"
-[string] $Script:Scope = "https://graph.microsoft.com/.default"
-
+$cloudService = Get-CloudServiceEndpoint $AzureEnvironment
+$Script:Scope = "$($cloudService.graphApiEndpoint)/.default"
+$azureADEndpoint = $cloudService.AzureADEndpoint
+    
 Write-Host "Requesting an OAuth token to collect the data." -ForegroundColor Green
 $applicationInfo = @{
     "TenantID" = $OAuthTenantId
