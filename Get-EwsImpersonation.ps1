@@ -654,10 +654,8 @@ function TestInstalledModules {
     }
  
     if($ImpersonationCheck) {
-        try {
-            # Test for ExchangeOnlineManagement module
-            $exchangeOnlineInstalled = Get-InstalledModule -Name ExchangeOnlineManagement -MinimumVersion 3.4.0 -ErrorAction Stop
-        } catch {
+        # Test for ExchangeOnlineManagement module
+        if(-not (Get-InstalledModule -Name ExchangeOnlineManagement -MinimumVersion 3.4.0)) {
             if(-not (IsAdmin)) {
                 Write-Host "Administrator privileges required to install 'ExchangeOnlineManagement' module." -ForegroundColor Red
                 exit
