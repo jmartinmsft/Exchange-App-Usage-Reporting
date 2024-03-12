@@ -61,9 +61,9 @@ param(
 
     [ValidateSet("Global", "USGovernmentL4", "USGovernmentL5", "ChinaCloud")]
     [Parameter(Mandatory = $false)]
-    [string]$AzureEnvironment = "Global"
+    [string]$AzureEnvironment = "Global",
 
-    #[Parameter(Mandatory=$False,HelpMessage="The ImpersonationCheck parameter is a switch that enables checking accounts with EWS impersonation rights.")][switch]$ImpersonationCheck
+    [Parameter(Mandatory=$False,HelpMessage="The ImpersonationCheck parameter is a switch that enables checking accounts with EWS impersonation rights.")][switch]$ImpersonationCheck
 )
 
 function Write-VerboseLog ($Message) {
@@ -1008,7 +1008,6 @@ function GetAppsByApi {
             if($ExchangeOnlineAccess -or $GraphAccess) {
                 foreach($ResourceAccess in $RequiredResourceAccess.ResourceAccess) {
                     if($($ResourceAccess.Type) -eq "Scope") {
-                        Write-Verbose "Finding delegated permissions for the application $($application.displayName)."
                         $AppScope = $sp.Oauth2PermissionScopes | Where-Object {$_.id -eq "$($ResourceAccess.id)"}
                         $Script:AppPermission = [PSCustomObject]@{
                             'ApplicationDisplayName'  = $application.displayName
@@ -1064,7 +1063,7 @@ function GetAppsByApi {
 }
 
 function GetEwsSignIns{
-    $ApiSignInsFile = "$OutputPath\$Api-SignInEvents-$((Get-Date).ToString("yyyyMMddhhmmss")).csv"
+    $Script:ApiSignInsFile = "$OutputPath\$Api-SignInEvents-$((Get-Date).ToString("yyyyMMddhhmmss")).csv"
     $ApplicationPermissions = $Script:ApiPermissions | Sort-Object -Property ApplicationId -Unique
     $NumberOfApps = $ApplicationPermissions.Count
     $AppsCompleted = 0
@@ -1078,7 +1077,7 @@ function GetEwsSignIns{
         Write-Progress -Activity "Searching for EWS sign-in attempts" -Status "Checking $($App.ApplicationDisplayName)" -PercentComplete ((($AppsCompleted)/$NumberOfApps)*100)
         $Query = "auditLogs/signIns?`$filter=appid eq '$($App.ApplicationId)' and signInEventTypes/any(t: t eq 'interactiveUser' or t eq 'nonInteractiveUser' or t eq 'servicePrincipal' or t eq 'managedIdentity') and CreatedDateTime ge $SearchStartDate"
         $SignIns = Invoke-GraphApiRequest -Query $Query -Endpoint beta -AccessToken $Script:Token -GraphApiUrl $cloudService.graphApiEndpoint
-        $SignIns.Content.Value | Select-Object id, createdDateTime, appId, appDisplayName, correlationId, clientCredentialType, resourceDisplayName, resourceId, servicePrincipalId , userDisplayName, userPrincipalName, @{Name='SignInEventTypes';Expression={$_.signInEventTypes -join '; ' } } | Export-Csv -Path $ApiSignInsFile -NoTypeInformation -NoClobber -Append
+        $SignIns.Content.Value | Select-Object id, createdDateTime, appId, appDisplayName, correlationId, clientCredentialType, resourceDisplayName, resourceId, servicePrincipalId , userDisplayName, userPrincipalName, @{Name='SignInEventTypes';Expression={$_.signInEventTypes -join '; ' } } | Export-Csv -Path $Script:ApiSignInsFile -NoTypeInformation -NoClobber -Append
         $AppsCompleted++
     }
 }
@@ -1184,9 +1183,27 @@ $Script:ApiPermissions | Format-Table -AutoSize
 
 # Call function to obtain sign-in logs for app registrations using the selected API
 GetEwsSignIns
-Write-Host "Script complete" -ForegroundColor Green
 
 # Find users with EWS impersonation rights
+Write-Host "Checking for possible application impersonation sign-in events..." -ForegroundColor Green
 if($ImpersonationCheck){
+    if(-not((Get-ConnectionInformation).Name -like "ExchangeOnline*")) {
+        Connect-ExchangeOnline
+    }
+    $ImpersonationAccounts = New-Object System.Collections.ArrayList
     Write-Host "Checking for users with the ApplicationImpersonation role" -ForegroundColor Green
+    $ImpersonationRoleAssignments = Get-ManagementRoleAssignment -Role ApplicationImpersonation -GetEffectiveUsers | Where-Object {$_.Name -ne "ApplicationImpersonation-Organization Management-Delegating" -or $_.Name -notlike "ApplicationImpersonation-RIM-MailboxAdmins*"}
+    $ImpersonationRoleAssignments | Export-Csv "$OutputPath\ManagementRoleAssignments-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
+    $ApiSignIns = Import-Csv -Path $Script:ApiSignInsFile
+    foreach($RoleAssignment in $ImpersonationRoleAssignments) {
+        foreach($SignIn in $ApiSignIns) {
+            if($SignIn.userDisplayName -eq $RoleAssignment.EffectiveUserName) {
+                $ImpersonationAccounts.Add($RoleAssignment.EffectiveUserName) | Out-Null
+            }
+        }
+    }
+}
+$ImpersonationAccounts = $ImpersonationAccounts | Sort-Object -Unique
+foreach($i in $ImpersonationAccounts) {
+    Write-Host "$($i) has impersonation rights and signed in using Delegated permissions." -ForegroundColor Cyan
 }

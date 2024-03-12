@@ -46,3 +46,9 @@ The OutputPath parameter specifies the path for the EWS usage report.
 
 NumberOfDays
 The NumberOfDays parameter specifies how many days of sign-in logs to query (default is one).
+
+AzureEnvironment
+The AzureEnvironment parameter specifies the Azure environment for the tenant.
+
+ImpersonationCheck
+The ImpersonationCheck parameter is a switch that enables checking accounts with EWS impersonation rights.
