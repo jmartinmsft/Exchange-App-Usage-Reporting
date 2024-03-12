@@ -1180,7 +1180,13 @@ GetAppsByApi
 $Script:ApiPermissions | Format-Table -AutoSize
 
 # Call function to obtain sign-in logs for app registrations using the selected API
-GetEwsSignIns
+if($Script:ApiPermissions.Count -ge 1) {
+    GetEwsSignIns
+}
+else {
+    Write-Host "No app registrations were found using the $($Api) API." -ForegroundColor Yellow
+}
+
 
 # Find users with EWS impersonation rights
 Write-Host "Checking for possible application impersonation sign-in events..." -ForegroundColor Green
