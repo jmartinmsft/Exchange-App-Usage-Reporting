@@ -1196,7 +1196,7 @@ if($ImpersonationCheck){
     }
     $ImpersonationAccounts = New-Object System.Collections.ArrayList
     Write-Host "Checking for users with the ApplicationImpersonation role" -ForegroundColor Green
-    $ImpersonationRoleAssignments = Get-ManagementRoleAssignment -Role ApplicationImpersonation -GetEffectiveUsers | Where-Object {$_.Name -ne "ApplicationImpersonation-Organization Management-Delegating" -or $_.Name -notlike "ApplicationImpersonation-RIM-MailboxAdmins*"}
+    $ImpersonationRoleAssignments = Get-ManagementRoleAssignment -Role ApplicationImpersonation -GetEffectiveUsers | Where-Object {$_.Name -ne "ApplicationImpersonation-Organization Management-Delegating" -and $_.Name -notlike "ApplicationImpersonation-RIM-MailboxAdmins*"}
     $ImpersonationRoleAssignments | Export-Csv "$OutputPath\ManagementRoleAssignments-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
     $ApiSignIns = Import-Csv -Path $Script:ApiSignInsFile
     foreach($RoleAssignment in $ImpersonationRoleAssignments) {
