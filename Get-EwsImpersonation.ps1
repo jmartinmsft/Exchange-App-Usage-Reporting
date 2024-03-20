@@ -1079,6 +1079,11 @@ function GetEwsSignIns{
     
     Write-Host "Searching for sign-in events for the $($Api) API..." -ForegroundColor Green
     foreach($App in $ApplicationPermissions) {
+        if($ImpersonationCheck) {
+            if($App.PermissionValue -ne "EWS.AccessAsUser.All") {
+                continue
+            }
+        }
         CheckTokenExpiry -Token ([ref]$Script:GraphToken) -ApplicationInfo $Script:applicationInfo -AzureADEndpoint $azureADEndpoint
         Write-Progress -Activity "Searching for EWS sign-in attempts" -Status "Checking $($App.ApplicationDisplayName)" -PercentComplete ((($AppsCompleted)/$NumberOfApps)*100)
         $Query = "auditLogs/signIns?`$filter=appid eq '$($App.ApplicationId)' and signInEventTypes/any(t: t eq 'interactiveUser' or t eq 'nonInteractiveUser' or t eq 'servicePrincipal' or t eq 'managedIdentity') and CreatedDateTime ge $SearchStartDate"
@@ -1221,7 +1226,12 @@ if($ImpersonationCheck){
         }
     }
 }
+if($ImpersonationAccounts.Count -ge 1) {
 $ImpersonationAccounts = $ImpersonationAccounts | Sort-Object -Unique
 foreach($i in $ImpersonationAccounts) {
     Write-Host "$($i) has impersonation rights and signed in using Delegated permissions." -ForegroundColor Cyan
+}
+}
+else {
+    Write-Host "No users have signed in with impersonation rights in the past $($NumberOfDays) day(s)." -ForegroundColor Yellow
 }
