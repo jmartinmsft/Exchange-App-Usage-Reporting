@@ -637,28 +637,27 @@ function TestInstalledModules {
     
     if($PermissionType -eq "Delegated") {
         Write-Verbose "Checking for the MSAL.PS PowerShell module."
-        if(-not (Get-InstalledModule -Name MSAL.PS -MinimumVersion 4.37.0.0 -ErrorAction SilentlyContinue)) {
+        if(-not (Get-InstalledModule -Name MSAL.PS -MinimumVersion '4.37.0.0' -ErrorAction SilentlyContinue)) {
             if(-not (IsAdmin)) {
                 Write-Host "Administrator privileges required to install 'MSAL.PS' module. Re-run PowerShell or the script as Admin." -ForegroundColor Red
                 exit
             }
-        }
-        else{
-            Write-Host "Prerequisite not found: Attempting to install 'MSAL.PS' module..." -ForegroundColor Yellow
-            try{
-                Install-Module -Name MSAL.PS -MinimumVersion 4.37.0.0 -Repository PSGallery -Force
+            else{
+                Write-Host "Prerequisite not found: Attempting to install 'MSAL.PS' module..." -ForegroundColor Yellow
+                try{
+                    Install-Module -Name MSAL.PS -MinimumVersion 4.37.0.0 -Repository PSGallery -Force
+                }
+                catch{
+                    Write-Host "Failed to install 'MSAL.PS' module. Please install it manually." -ForegroundColor Red
+                    exit
+                }
+                # Check again for MSAL.PS module installation
+                if(-not (Get-InstalledModule -Name MSAL.PS -MinimumVersion 4.37.0.0)) {
+                    Write-Host "Failed to install 'MSAL.PS' module. Please install it manually." -ForegroundColor Red
+                    exit
+                }
             }
-            catch{
-                Write-Host "Failed to install 'MSAL.PS' module. Please install it manually." -ForegroundColor Red
-                exit
-            }
         }
-    }
- 
-    # Check again for MSAL.PS module installation
-    if(-not (Get-InstalledModule -Name MSAL.PS -MinimumVersion 4.37.0.0)) {
-        Write-Host "Failed to install 'MSAL.PS' module. Please install it manually." -ForegroundColor Red
-        exit
     }
  
     if($ImpersonationCheck) {
