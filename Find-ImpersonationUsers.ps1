@@ -22,21 +22,21 @@
     SOFTWARE
 #>
 
-# Version 24.04.11.1912
+# Version 24.04.15.0711
 
 param(
     [Parameter(Mandatory=$false, HelpMessage="The PermissionType parameter specifies whether the app registrations uses delegated or application permissions")]
     [ValidateSet('Application','Delegated')]
-    [string]$PermissionType,
+    [string]$PermissionType='Application',
 
     [Parameter(Mandatory=$false, HelpMessage="The OAuthClientId parameter specifies the the app ID for the OAuth token request.")]
-    [string] $OAuthClientId,
+    [string] $OAuthClientId="5bd878c3-a3f8-4996-96c9-09c5d7965e72",
 
     [Parameter(Mandatory=$false, HelpMessage="The OAuthClientSecret parameter specifies the the app secret for the OAuth token request.")]
     [securestring] $OAuthClientSecret,
 
     [Parameter(Mandatory=$false, HelpMessage="The OAuthTenantId parameter specifies the the tenant ID for the OAuth token request.")]
-    [string] $OAuthTenantId,
+    [string] $OAuthTenantId="9101fc97-5be5-4438-a1d7-83e051e52057",
 
     [Parameter(Mandatory=$False,HelpMessage="The OAuthRedirectUri specifies the redirect Uri of the Azure registered application.")]
     [string] $OAuthRedirectUri = "https://login.microsoftonline.com/common/oauth2/nativeclient",
@@ -54,7 +54,7 @@ param(
 
     [ValidateSet("Global", "USGovernmentL4", "USGovernmentL5", "ChinaCloud")]
     [Parameter(Mandatory = $false)]
-    [string]$AzureEnvironment = "Global"
+    [string]$AzureEnvironment = "Global"    
 )
 
 function Write-VerboseLog ($Message) {
@@ -1041,10 +1041,19 @@ $BaseURI = "$APIResource/api/v1.0/$OAuthTenantId/activity/feed/subscriptions"
 $Subscriptions = @('Audit.Exchange')
 $Headers = @{ Authorization = "Bearer $($Script:Token)" }
 
+# Retrieve data for the past hour
+$Hour = (New-TimeSpan -Minutes 60).Ticks
+$EndTime = ((Get-Date).AddHours(-1)).ToUniversalTime()
+$Ticks = ([Math]::Round($EndTime.Ticks / $Hour, 0) * $Hour) -as [long]
+$EndTime = [datetime]$Ticks
+$StartTime = $EndTime.AddHours(-1)
+$EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
+$StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
+
 # Create Function to Check content availability in all content types (inlcuding all pages) and store results in $Subscription variable, also build the URI list in the correct format
 function buildLog($BaseURI, $Subscription, $OAuthTenantId, $Headers) {
     try {
-        $Log = Invoke-WebRequest -Method GET -Headers $Headers -Uri "$BaseURI/content?contentType=$Subscription&PublisherIdentifier=$TenantGUID" -UseBasicParsing -ErrorAction Stop
+        $Log = Invoke-WebRequest -Method GET -Headers $Headers -Uri "$BaseURI/content?contentType=$Subscription&PublisherIdentifier=$TenantGUID&startTime=$StartSearch&endTime=$EndSearch" -UseBasicParsing -ErrorAction Stop
     }
     catch {
         write-host -ForegroundColor Red "Invoke-WebRequest command has failed"
@@ -1149,10 +1158,8 @@ function outputToFile($TotalContentPages, $JSONfilename, $Headers){
         }
         foreach($uri in $uris){
             try{
-                #$Logdata += Invoke-RestMethod -Uri $uri -Headers $Headers -Method Get
                 $Logdata = Invoke-RestMethod -Uri $uri -Headers $Headers -Method Get
                 $Logdata = $Logdata | Where-Object {(($_.RecordType -eq 2 -or $_.RecordType -eq 3) -and $_.UserId -match '^S-1-[0-59]-\d{2}-\d{8,10}-\d{8,10}-\d{8,10}-[1-9]\d{3}')}
-                #$Logdata
                 $Logdata | ConvertTo-Json -Depth 100 | Set-Content -Encoding UTF8 $JSONfilename
             } catch {
                 write-host -ForegroundColor Red "ERROR"
