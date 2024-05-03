@@ -13,11 +13,8 @@
 //
 //**********************************************************************​
 //
-//
-// This script attempts to send messages from a random EXO mailbox to a random group of EXO recipients using EWS.
-// This script uses application permissions and is restricted by an RBAC management role assignment
 #>
-
+# Version 20240503.1218
 param(
     [Parameter(Mandatory=$false, HelpMessage="Number of message the script should send.")] [string] $MailboxName='thanos@thejimmartin.com',
     [Parameter(Mandatory=$false, HelpMessage="Number of message the script should send.")] [string] $FolderName='Inbox',
