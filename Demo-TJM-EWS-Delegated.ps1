@@ -44,10 +44,8 @@ $sourceCode = @"
 
 function Get-OAuthToken{
     #Change the AppId, AppSecret, and TenantId to match your registered application
-    $OAuthClientSecret = "NUT8Q~JfJpdu1_f7y29Csd7AadGEsap-8wBwZbDU"
+
     $OAuthClientSecret = $OAuthClientSecret | ConvertTo-SecureString -Force -AsPlainText
-    $OAuthClientId = "a60993cf-6629-4c11-8f41-6a767072d97d"
-    $OAuthTenantId = "9101fc97-5be5-4438-a1d7-83e051e52057"
     $OAuthClientCertificate = Get-Item Cert:\CurrentUser\My\6389EA02A19D671CAF8AFA03CA428FC7BB9AC16D
     $OAuthRedirectUri =  "https://login.microsoftonline.com/common/oauth2/nativeclient"
     $Uri = "https://login.microsoftonline.com/$OAuthTenantId/oauth2/v2.0/token"
