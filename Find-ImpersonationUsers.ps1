@@ -1043,10 +1043,11 @@ $Headers = @{ Authorization = "Bearer $($Script:Token)" }
 
 # Retrieve data for the past hour
 $Hour = (New-TimeSpan -Minutes 60).Ticks
-$EndTime = ((Get-Date).AddHours(-1)).ToUniversalTime()
+#$EndTime = ((Get-Date).AddHours(-1)).ToUniversalTime()
+$EndTime = (Get-Date).ToUniversalTime()
 $Ticks = ([Math]::Round($EndTime.Ticks / $Hour, 0) * $Hour) -as [long]
 $EndTime = [datetime]$Ticks
-$StartTime = $EndTime.AddHours(-1)
+$StartTime = $EndTime.AddHours(-24)
 $EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
 $StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
 
@@ -1060,6 +1061,7 @@ function buildLog($BaseURI, $Subscription, $OAuthTenantId, $Headers) {
         Write-host $error[0]
         return
     }
+    
     #Try to find if there is a NextPage in the returned URI
     if ($Log.Headers.NextPageUri) {
         $NextContentPage = $true
@@ -1145,6 +1147,7 @@ function getFileName($Date, $Subscription, $OutputPath){
 
 #Generate the correct URI format and export  logs
 function outputToFile($TotalContentPages, $JSONfilename, $Headers){
+    $AuditResults = New-Object System.Collections.ArrayList
     if($TotalContentPages.content.length -gt 2){
         $uris = @()
         $pages = $TotalContentPages.content.split(",")
@@ -1159,8 +1162,9 @@ function outputToFile($TotalContentPages, $JSONfilename, $Headers){
         foreach($uri in $uris){
             try{
                 $Logdata = Invoke-RestMethod -Uri $uri -Headers $Headers -Method Get
-                $Logdata = $Logdata | Where-Object {(($_.RecordType -eq 2 -or $_.RecordType -eq 3) -and $_.UserId -match '^S-1-[0-59]-\d{2}-\d{8,10}-\d{8,10}-\d{8,10}-[1-9]\d{3}')}
-                $Logdata | ConvertTo-Json -Depth 100 | Set-Content -Encoding UTF8 $JSONfilename
+                $AuditResults += $Logdata | Where-Object {(($_.RecordType -eq 2 -or $_.RecordType -eq 3) -and $_.UserId -match '^S-1-[0-59]-\d{2}-\d{8,10}-\d{8,10}-\d{8,10}-[1-9]\d{3}')}
+                #$Logdata | Out-File $OutputPath\testimperson-$($Date).txt -Append
+                $AuditResults | ConvertTo-Json -Depth 100 | Set-Content -Encoding UTF8 $JSONfilename
             } catch {
                 write-host -ForegroundColor Red "ERROR"
                 Write-host $error[0]
@@ -1173,18 +1177,13 @@ function outputToFile($TotalContentPages, $JSONfilename, $Headers){
     }
 }
 
-#Collecting and Exporting Log data
-Write-Host "Checking output folder path..." -ForegroundColor Green
-
-
 Write-Host "Collecting and exporting log data..." -ForegroundColor Green
 foreach($Subscription in $Subscriptions){
     
     Write-Host "Collecting log data from $($Subscription): " -NoNewline -ForegroundColor Gray
     $logs = buildLog $BaseURI $Subscription $TenantGUID $Headers
-
+    
     $JSONfileName = getFileName $Date $Subscription $outputPath
-    #$JSONfilename = ("$($OutputPath)$($Subscription)_$($Date).json")
   
     Write-host "Exporting log data to $($JSONfilename):" -NoNewline -ForegroundColor Gray
     outputToFile $logs $JSONfilename $Headers

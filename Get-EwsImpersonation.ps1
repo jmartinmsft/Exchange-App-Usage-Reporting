@@ -1084,7 +1084,7 @@ function GetEwsSignIns{
                 continue
             }
         }
-        CheckTokenExpiry -Token ([ref]$Script:GraphToken) -ApplicationInfo $Script:applicationInfo -AzureADEndpoint $azureADEndpoint
+        CheckTokenExpiry -Token ([ref]$Script:GraphToken) -ApplicationInfo $Script:applicationInfo -AzureADEndpoint $azureADEndpoint | Out-Null
         Write-Progress -Activity "Searching for EWS sign-in attempts" -Status "Checking $($App.ApplicationDisplayName)" -PercentComplete ((($AppsCompleted)/$NumberOfApps)*100)
         $Query = "auditLogs/signIns?`$filter=appid eq '$($App.ApplicationId)' and signInEventTypes/any(t: t eq 'interactiveUser' or t eq 'nonInteractiveUser' or t eq 'servicePrincipal' or t eq 'managedIdentity') and CreatedDateTime ge $SearchStartDate"
         $SignIns = Invoke-GraphApiRequest -Query $Query -Endpoint beta -AccessToken $Script:Token -GraphApiUrl $cloudService.graphApiEndpoint
