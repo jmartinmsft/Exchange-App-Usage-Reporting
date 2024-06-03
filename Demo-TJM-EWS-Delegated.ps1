@@ -111,6 +111,15 @@ $WellKnownFolderNames = @("ArchiveDeletedItems",
             "VoiceMail"
     )
 
+    $script:RequiredPropSet = New-Object Microsoft.Exchange.WebServices.Data.PropertySet([Microsoft.Exchange.WebServices.Data.BasePropertySet]::IdOnly,
+    [Microsoft.Exchange.WebServices.Data.ItemSchema]::Subject,
+    [Microsoft.Exchange.WebServices.Data.EmailMessageSchema]::Sender,
+    [Microsoft.Exchange.WebServices.Data.ItemSchema]::ItemClass,
+    [Microsoft.Exchange.WebServices.Data.EmailMessageSchema]::InternetMessageId,
+    [Microsoft.Exchange.WebServices.Data.EmailMessageSchema]::ReceivedBy,
+    [Microsoft.Exchange.WebServices.Data.ItemSchema]::DateTimeCreated)
+
+
 if($FolderName.Replace(" ","") -notin $WellKnownFolderNames) {
     Write-Host "Searching for $FolderName in the mailbox..." -ForegroundColor Cyan
     $folderid = New-Object Microsoft.Exchange.WebServices.Data.FolderId([Microsoft.Exchange.WebServices.Data.WellKnownFolderName]::MsgFolderRoot,$MailboxName)
@@ -150,6 +159,7 @@ catch {
         $fiResult = $MailboxFolder.FindItems($ivItemView)
         foreach($Item in $fiResult.Items){  
             $Item.Subject
+            $ItemBind = [Microsoft.Exchange.WebServices.data.Item]::Bind($service, $item.Id,$script:RequiredPropSet)
         }
         #$Item.Delete([Microsoft.Exchange.WebServices.Data.DeleteMode]::SoftDelete)
         #endregion
