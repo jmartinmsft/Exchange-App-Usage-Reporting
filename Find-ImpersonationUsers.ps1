@@ -858,7 +858,8 @@ function Get-OAuthToken {
         if(-not(($AppScope.Contains("offline_access")))) {
             $AppScope += "offline_access"
         }
-        $Script:GraphScope = "$($cloudService.GraphApiEndpoint)//$($Scope)"
+        #$Script:GraphScope = "$($cloudService.GraphApiEndpoint)//$($Scope)"
+        $Script:GraphScope = "$($ApiEndpoint)//$($Scope)"
         $oAuthReturnObject = Get-DelegatedAccessToken -AzureADEndpoint $cloudService.AzureADEndpoint -GraphApiUrl $cloudService.GraphApiEndpoint -Scope $Script:GraphScope -ClientID $OAuthClientId -RedirectUri $OAuthRedirectUri
         if ($oAuthReturnObject.Successful -eq $false) {
             Write-Host ""
@@ -1007,7 +1008,7 @@ function outputToFile($TotalContentPages, $JSONfilename, $Headers){
         foreach($uri in $uris){
             try{
                 $Logdata = Invoke-RestMethod -Uri $uri -Headers $Headers -Method Get
-                $AuditResults += $Logdata | Where-Object {(($_.RecordType -eq 2 -or $_.RecordType -eq 3) -and $_.UserId -match '^S-1-[0-59]-\d{2}-\d{8,10}-\d{8,10}-\d{8,10}-[1-9]\d{3}')}
+                $AuditResults += $Logdata | Where-Object {(($_.RecordType -eq 2 -or $_.RecordType -eq 3 -or $_.RecordType -eq 50) -and $_.UserId -match '^S-1-[0-59]-\d{2}-\d{8,10}-\d{8,10}-\d{8,10}-[1-9]\d{3}')}
                 #$Logdata | Out-File $OutputPath\testimperson-$($Date).txt -Append
                 $AuditResults | ConvertTo-Json -Depth 100 | Set-Content -Encoding UTF8 $JSONfilename
             } catch {
