@@ -1,7 +1,10 @@
 Get-AppRegistrationsByApiPermission
+
+
 The Get AppRegistrations by API permisison script helps to find applications that are using EWS API permissions. It uses the Graph API to query Entra ID for all app registrations and service principals within the tenant. It then correlates the results to provide a list of applications with both Application and Delegated EWS API permissions.
 
 Requirements
+
 The script requires an application registration in Entra ID that has the Microsoft.Graph Application.Read.All permission. The permission may be Application or Delegated type.
 
 Syntax
