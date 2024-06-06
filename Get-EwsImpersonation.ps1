@@ -1209,11 +1209,11 @@ else {
 
 # Find users with EWS impersonation rights
 Write-Host "Checking for possible application impersonation sign-in events..." -ForegroundColor Green
+$ImpersonationAccounts = New-Object System.Collections.ArrayList
 if($ImpersonationCheck){
     if(-not((Get-ConnectionInformation).Name -like "ExchangeOnline*")) {
         Connect-ExchangeOnline
     }
-    $ImpersonationAccounts = New-Object System.Collections.ArrayList
     Write-Host "Checking for users with the ApplicationImpersonation role" -ForegroundColor Green
     $ImpersonationRoleAssignments = Get-ManagementRoleAssignment -Role ApplicationImpersonation -GetEffectiveUsers | Where-Object {$_.Name -ne "ApplicationImpersonation-Organization Management-Delegating" -and $_.Name -notlike "ApplicationImpersonation-RIM-MailboxAdmins*"}
     $ImpersonationRoleAssignments | Export-Csv "$OutputPath\ManagementRoleAssignments-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
@@ -1226,7 +1226,7 @@ if($ImpersonationCheck){
         }
     }
 }
-if($ImpersonationAccounts.Count -ge 1) {
+if($ImpersonationAccounts.Count -ge 1 -and $ImpersonationCheck) {
 $ImpersonationAccounts = $ImpersonationAccounts | Sort-Object -Unique
 foreach($i in $ImpersonationAccounts) {
     Write-Host "$($i) has impersonation rights and signed in using Delegated permissions." -ForegroundColor Cyan

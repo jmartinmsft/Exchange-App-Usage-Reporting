@@ -22,7 +22,7 @@
     SOFTWARE
 #>
 
-# Version 24.06.03.1944
+# Version 24.06.06.0741
 
 param (
     [ValidateScript({ Test-Path $_ })]
@@ -37,10 +37,10 @@ param (
     [string]$PermissionType,
     
     [Parameter(Mandatory=$False,HelpMessage="The OAuthClientId parameter is the Azure Application Id that this script uses to obtain the OAuth token.  Must be registered in Azure AD.")] 
-    [string]$OAuthClientId = "2f79178b-54c3-4e81-83a0-a7d16010a424",
+    [string]$OAuthClientId,
     
     [Parameter(Mandatory=$False,HelpMessage="The OAuthTenantId parameter is the tenant Id where the application is registered (Must be in the same tenant as mailbox being accessed).")] 
-    [string]$OAuthTenantId = "9101fc97-5be5-4438-a1d7-83e051e52057",
+    [string]$OAuthTenantId,
     
     [Parameter(Mandatory=$False,HelpMessage="The OAuthRedirectUri parameter is the redirect Uri of the Azure registered application.")] 
     [string]$OAuthRedirectUri = "http://localhost:8004",
@@ -54,7 +54,7 @@ param (
     [Parameter(Mandatory=$False,HelpMessage="The CertificateStore parameter specifies the certificate store where the certificate is loaded.")] [ValidateSet("CurrentUser", "LocalMachine")]
      [string] $CertificateStore = $null,
 
-    [Parameter(Mandatory=$false)] [Array]$Scope= @("Mail.ReadWrite","Mail.Send")
+    [Parameter(Mandatory=$false)] [Array]$Scope= @("ActivityFeed.Read")
 )
 
 
@@ -889,11 +889,10 @@ $Headers = @{ Authorization = "Bearer $($Script:Token)" }
 
 # Retrieve data for the past hour
 $Hour = (New-TimeSpan -Minutes 60).Ticks
-#$EndTime = ((Get-Date).AddHours(-1)).ToUniversalTime()
 $EndTime = (Get-Date).ToUniversalTime()
 $Ticks = ([Math]::Round($EndTime.Ticks / $Hour, 0) * $Hour) -as [long]
 $EndTime = [datetime]$Ticks
-$StartTime = $EndTime.AddHours(-1)
+$StartTime = $EndTime.AddHours(-24)
 $EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
 $StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
 
@@ -1009,7 +1008,6 @@ function outputToFile($TotalContentPages, $JSONfilename, $Headers){
             try{
                 $Logdata = Invoke-RestMethod -Uri $uri -Headers $Headers -Method Get
                 $AuditResults += $Logdata | Where-Object {(($_.RecordType -eq 2 -or $_.RecordType -eq 3 -or $_.RecordType -eq 19 -or $_.RecordType -eq 50) -and $_.UserId -match '^S-1-[0-59]-\d{2}-\d{8,10}-\d{8,10}-\d{8,10}-[1-9]\d{3}')}
-                #$Logdata | Out-File $OutputPath\testimperson-$($Date).txt -Append
                 $AuditResults | ConvertTo-Json -Depth 100 | Set-Content -Encoding UTF8 $JSONfilename
             } catch {
                 write-host -ForegroundColor Red "ERROR"
