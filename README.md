@@ -1,54 +1,19 @@
-Get-EwsImpersonation
+Find-ImpersonationUsers
 
-This PowerShell script can be used to locate app registrations that are using the specified API and generate a sign-in report for those app registrations.
+The Find Impersonation Users script helps to find user accounts that are using the Exchange ApplicationImpersation role. It queries the Unified Audit Logs for Exchange events and filters for relevant results. The results can be used to help locate an applications that are leveraging the ApplicationImpersonation role prior to its retirement in Exchange Online.
 
 Requirements
-An application registration must be created in Entra for the tenant and this application must have Application.Read.All and AuditLog.Read.All Graph API permission (either Application or Delegated). The script also requires the MSAL.PS PowerShell module.
+The script requires an application registration in Entra ID that has the Office 365 Management APIs ActiveFeed.Read permission. The permission may be Application or Delegated type.
 
-How To Run
-This syntax will get sign-in logs for app registrations with EWS permissions using delegated permissions (prompt for credentials).
+Syntax
 
-.\Get-EwsImpersonation.ps1 -Api EWS -PermissionType Delegate -OAuthClientId abcdefg-1234-hijklm -OAuthClientSecret Pl3a$eD0n'tSh@rE -OAuthTenantId 91000000-11111-1234-3000000 -OAuthRedirectUri https://login.microsoftonline.com/common/oauth2/nativeclient -OutputPath c:\temp
+This cmdlet will run the Find Impersonation User script using an application secret.
+.\Find-ImpersonationUsers.ps1 -PermissionType Application  -OAuthClientSecret $secret -OAuthClientId f733c1fb-e6d7-5e76-b542-33b5e4a604ca -OAuthTenantId 9101fc97-6cf6-4438-a1d7-83e051e52057 -OutputPath C:\Scripts\Results\
 
-This syntax will get sign-in logs for app registrations with EWS permissions using application permissions (using a certificate).
+This cmdlet will run the Find Impersonation User script using delegated permissions.
 
-.\Get-EwsImpersonation.ps1 -Api EWS -PermissionType Application -OAuthClientId abcdefg-1234-hijklm -OAuthCertificate 654321ABCDEFG023 -OAuthTenantId 91000000-11111-1234-3000000 -OAuthRedirectUri https://login.microsoftonline.com/common/oauth2/nativeclient -OutputPath c:\temp
+.\Find-ImpersonationUsers.ps1 -OAuthClientSecret $secret -PermissionType Delegated -OAuthClientId f733c1fb-e6d7-5e76-b542-33b5e4a604ca -OutputPath C:\Scripts\Results\ -Scope ActivityFeed.Read
 
+This cmdlet will run the Find Impersonation User script using a certificate.
 
-Parameters
-
-Api
-The Api parameter specifies which API Permisions to export for esach Application registration.
-
-PermissionType
-The PermissionType parameter specifies whether the app registrations uses delegated or application permissions (Default value is Application).
-
-OAuthClientId
-The OAuthClientId parameter specifies the the app ID for the OAuth token request.
-
-OAuthClientSecret
-The OAuthClientSecret parameter specifies the the app secret for the OAuth token request.
-
-OAuthTenantId
-The OAuthTenantId parameter specifies the the tenant ID for the OAuth token request.
-
-OAuthRedirectUri
-The OAuthRedirectUri specifies the redirect Uri of the Azure registered application.
-
-OAuthCertificate
-The OAuthCertificate parameter is the certificate for the registerd application.
-
-CertificateStore
-The CertificateStore parameter specifies the certificate store where the certificate is loaded.$null,
-
-OutputPath
-The OutputPath parameter specifies the path for the EWS usage report.
-
-NumberOfDays
-The NumberOfDays parameter specifies how many days of sign-in logs to query (default is one).
-
-AzureEnvironment
-The AzureEnvironment parameter specifies the Azure environment for the tenant.
-
-ImpersonationCheck
-The ImpersonationCheck parameter is a switch that enables checking accounts with EWS impersonation rights.
+.\Find-ImpersonationUsers.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OAuthCertificate 6389EA02A19D671CAF8AFA03CA428FC7BB9AC16D -CertificateStore LocalMachine -OutputPath C:\Scripts\Results\
