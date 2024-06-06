@@ -16,4 +16,4 @@ This cmdlet will run the Find Impersonation User script using delegated permissi
 
 This cmdlet will run the Find Impersonation User script using a certificate.
 
-.\Find-ImpersonationUsers.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OAuthCertificate 6389EA02A19D671CAF8AFA03CA428FC7BB9AC16D -CertificateStore LocalMachine -OutputPath C:\Scripts\Results\
+.\Find-ImpersonationUsers.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-5e76-b542-33b5e4a604ca -OAuthCertificate 6389EA02A19D671CAF9BFA03CA428FC7BB9AC16D -CertificateStore LocalMachine -OutputPath C:\Scripts\Results\
