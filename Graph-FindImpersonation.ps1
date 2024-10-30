@@ -22,7 +22,7 @@
     SOFTWARE
 #>
 
-# Version 24.06.06.0741
+# Version 24.10.30.1723
 
 param (
     [ValidateScript({ Test-Path $_ })]
@@ -54,13 +54,16 @@ param (
     [Parameter(Mandatory=$False,HelpMessage="The CertificateStore parameter specifies the certificate store where the certificate is loaded.")] [ValidateSet("CurrentUser", "LocalMachine")]
     [string]$CertificateStore = $null,
 
-    [Parameter(Mandatory=$false)] [Array]$Scope= @("ActivityFeed.Read"),
+    [Parameter(Mandatory=$false)] [object]$Scope= @("AuditLog.Read.All"),
     
     [Parameter(Mandatory=$False)]
     [string]$AuditQueryId,
 
     [Parameter(Mandatory=$true)] [ValidateSet("NewAuditQuery", "CheckAuditQuery","GetQueryResults")]
-    [string]$Operation = $null
+    [string]$Operation = $null,
+
+    [Parameter(Mandatory=$false)][ValidateRange(1,90)]
+    [string]$NumberOfDays = 30
 )
 
 
@@ -1019,7 +1022,7 @@ if($Operation -eq "NewAuditQuery") {
     $EndTime = (Get-Date).ToUniversalTime()
     $Ticks = ([Math]::Round($EndTime.Ticks / $Hour, 0) * $Hour) -as [long]
     $EndTime = [datetime]$Ticks
-    $StartTime = $EndTime.AddDays(-30)
+    $StartTime = $EndTime.AddDays(-$NumberOfDays)
     $EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
     $StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
 
