@@ -22,7 +22,7 @@
     SOFTWARE
 #>
 
-# Version 24.06.06.0741
+# Version 24.10.30.0801
 
 param (
     [ValidateScript({ Test-Path $_ })]
@@ -54,9 +54,14 @@ param (
     [Parameter(Mandatory=$False,HelpMessage="The CertificateStore parameter specifies the certificate store where the certificate is loaded.")] [ValidateSet("CurrentUser", "LocalMachine")]
      [string] $CertificateStore = $null,
 
-    [Parameter(Mandatory=$false)] [Array]$Scope= @("ActivityFeed.Read")
-)
+    [Parameter(Mandatory=$false)] [Array]$Scope= @("ActivityFeed.Read"),
 
+    [Parameter(Mandatory=$false, HelpMessage="The NumberOfDays parameter specifies how many days of audit logs to query (Maximum of seven days).")][ValidateRange(1,7)]
+    [int]$NumberOfDays=1,
+
+    [Parameter(Mandatory=$false, HelpMessage="The Interval parameter specifies whether the number of hours for each query")][ValidateRange(1,24)]
+    [int]$Interval=24
+)
 
 function Get-CloudServiceEndpoint {
     [CmdletBinding()]
@@ -873,6 +878,120 @@ function Get-OAuthToken {
     }    
 }
 
+# Create Function to Check content availability in all content types (inlcuding all pages) and store results in $Subscription variable, also build the URI list in the correct format
+function buildLog($BaseURI, $Subscription, $OAuthTenantId, $Headers) {
+    try {
+        $Log = Invoke-WebRequest -Method GET -Headers $Headers -Uri "$BaseURI/content?contentType=$Subscription&PublisherIdentifier=$TenantGUID&startTime=$Script:StartSearch&endTime=$Script:EndSearch" -UseBasicParsing -ErrorAction Stop
+    }
+    catch {
+        write-host -ForegroundColor Red "Invoke-WebRequest command has failed"
+        Write-host $error[0]
+        return
+    }
+    Write-Verbose "Here is next page uri $($Log.Headers.NextPageUri)"
+    #Try to find if there is a NextPage in the returned URI
+    if ($Log.Headers.NextPageUri) {
+        $NextContentPage = $true
+        $NextContentPageURI = $Log.Headers.NextPageUri
+        while ($NextContentPage -ne $false) {
+            $ThisContentPage = Invoke-WebRequest -Headers $Headers -Uri $NextContentPageURI -UseBasicParsing
+            Write-Verbose $ThisContentPage
+            $TotalContentPages += $ThisContentPage
+            if ($ThisContentPage.Headers.NextPageUri) {
+                $NextContentPage = $true    
+            }
+            else {
+                $NextContentPage = $false
+            }
+            $NextContentPageURI = $ThisContentPage.Headers.NextPageUri
+        }
+    } 
+    $TotalContentPages += $Log
+    Write-Host -ForegroundColor Green "OK"
+    return $TotalContentPages
+}
+
+#Check folder path and construct file names
+function getFileName($Date, $Subscription, $OutputPath, $FileTimeStamp){
+    #path should end with \
+    if (-not ($OutputPath.EndsWith("\"))) {
+        $OutputPath = "$($OutputPath)\"
+    }
+
+    # path should not be on root drive
+    if ($OutputPath.EndsWith(":\")) {
+        $OutputPath += "apilogs\"
+    }
+
+    # verify folder exists, if not try to create it
+    if (!(Test-Path($OutputPath))) {
+        Write-Host -ForegroundColor Yellow ">> Warning: '$OutputPath' does not exist. Creating one now..."
+        Write-host -ForegroundColor Gray "Creating '$OutputPath': " -NoNewline
+        try {
+            New-Item -ItemType "directory" -Path $OutputPath -ErrorAction Stop | Out-Null
+            Write-Host -ForegroundColor Green "Path '$OutputPath' has been created successfully"
+        }
+        catch {
+            write-host -ForegroundColor Red "FAILED to create '$OutputPath'"
+            Write-Host -ForegroundColor Red ">> ERROR: The directory '$OutputPath' could not be created."
+            Write-Host -ForegroundColor Red $error[0]
+        }
+    }
+    else{
+        Write-Verbose "Path '$OutputPath' already exists"
+    }
+    #$JSONfilename = ("$($OutputPath)$($Subscription)-$($FileTimeStamp).json")
+    $JSONfilename = ("$($OutputPath)$($Subscription)-$($FileTimeStamp).csv")
+    if(Test-Path($JSONfilename)) {
+        Remove-Item $JSONfilename -Confirm:$false -Force
+    }
+    return $JSONfilename
+}
+
+#Generate the correct URI format and export  logs
+function outputToFile($TotalContentPages, $JSONfilename, $Headers){
+    $AuditResults = New-Object System.Collections.ArrayList
+    if($TotalContentPages.content.length -gt 2){
+        $uris = @()
+        $pages = $TotalContentPages.content.split(",")
+        
+        foreach($page in $pages){
+            if($page -match "contenturi"){
+                $uri = $page.split(":")[2] -replace """"
+                $uri = "https:$uri"
+                $uris += $uri
+            }
+        }
+        CheckTokenExpiry -Environment $Environment -Token ([ref]$Script:Token) -ApplicationInfo $Script:applicationInfo -AzureADEndpoint $azureADEndpoint
+        foreach($uri in $uris){
+            try{
+                $Logdata = Invoke-RestMethod -Uri $uri -Headers $Headers -Method Get
+                $AuditResults += $Logdata | Where-Object {(($_.RecordType -eq 2 -or $_.RecordType -eq 3 -or $_.RecordType -eq 19 -or $_.RecordType -eq 50) -and $_.UserId -match '^S-1-[0-59]-\d{2}-\d{8,10}-\d{8,10}-\d{8,10}-[1-9]\d{3}' -and $_.LogonType -eq 1)}
+                #$AuditResults | ConvertTo-Json -Depth 100 | Set-Content -Encoding UTF8 $JSONfilename
+                if(-not([string]::IsNullOrEmpty($AuditResults.AppId))){
+                    $AuditResults | Export-Csv $JSONfilename -NoTypeInformation
+                }
+            } catch {
+                #Ignore the attempt to retrieve data beyond the 7 day limit
+                if($error[0].errorDetails.Message -notlike "*AF20051*") {
+                    Write-Host -ForegroundColor Red "ERROR"
+                    Write-Host $Error[0]
+                }
+                return
+            }      
+        }
+        if(Test-Path($JSONfilename)) {
+            write-host -ForegroundColor Green "OK"
+        }
+        else {
+            Write-Host -ForegroundColor Yellow "NONE"
+        }
+        #return $AuditResults
+    } else {
+        Write-Host -ForegroundColor Yellow "Nothing to output"
+    }
+}
+
 $cloudService = Get-CloudServiceEndpoint $AzureEnvironment
 $azureADEndpoint = $cloudService.AzureADEndpoint
 $Script:applicationInfo = @{
@@ -886,48 +1005,6 @@ Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
 $BaseURI = "$APIResource/api/v1.0/$OAuthTenantId/activity/feed/subscriptions"
 $Subscriptions = @('Audit.Exchange')
 $Headers = @{ Authorization = "Bearer $($Script:Token)" }
-
-# Retrieve data for the past hour
-$Hour = (New-TimeSpan -Minutes 60).Ticks
-$EndTime = (Get-Date).ToUniversalTime()
-$Ticks = ([Math]::Round($EndTime.Ticks / $Hour, 0) * $Hour) -as [long]
-$EndTime = [datetime]$Ticks
-$StartTime = $EndTime.AddHours(-24)
-$EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
-$StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
-
-# Create Function to Check content availability in all content types (inlcuding all pages) and store results in $Subscription variable, also build the URI list in the correct format
-function buildLog($BaseURI, $Subscription, $OAuthTenantId, $Headers) {
-    try {
-        $Log = Invoke-WebRequest -Method GET -Headers $Headers -Uri "$BaseURI/content?contentType=$Subscription&PublisherIdentifier=$TenantGUID&startTime=$StartSearch&endTime=$EndSearch" -UseBasicParsing -ErrorAction Stop
-    }
-    catch {
-        write-host -ForegroundColor Red "Invoke-WebRequest command has failed"
-        Write-host $error[0]
-        return
-    }
-    
-    #Try to find if there is a NextPage in the returned URI
-    if ($Log.Headers.NextPageUri) {
-        $NextContentPage = $true
-        $NextContentPageURI = $Log.Headers.NextPageUri
-        while ($NextContentPage -ne $false) {
-            $ThisContentPage = Invoke-WebRequest -Headers $Headers -Uri $NextContentPageURI -UseBasicParsing
-            $TotalContentPages += $ThisContentPage
-            if ($ThisContentPage.Headers.NextPageUri) {
-                $NextContentPage = $true    
-            }
-            else {
-                $NextContentPage = $false
-            }
-            $NextContentPageURI = $ThisContentPage.Headers.NextPageUri
-        }
-    } 
-    $TotalContentPages += $Log
-
-    Write-Host -ForegroundColor Green "OK"
-    return $TotalContentPages
-}
 
 #create new Subscription (if needed)
 Write-Host "Creating subscriptions..." -ForegroundColor Green
@@ -955,80 +1032,33 @@ $CheckSub | ForEach-Object {
     write-host "$($_.contenttype) ---> " -NoNewLine
     write-host $_.status -ForegroundColor Green
 }
- 
-#Check folder path and construct file names
-function getFileName($Date, $Subscription, $OutputPath){
-    #path should end with \
-    if (-not ($OutputPath.EndsWith("\"))) {
-        $OutputPath = "$($OutputPath)\"
-    }
-
-    # path should not be on root drive
-    if ($OutputPath.EndsWith(":\")) {
-        $OutputPath += "apilogs\"
-    }
-
-    # verify folder exists, if not try to create it
-    if (!(Test-Path($OutputPath))) {
-        Write-Host -ForegroundColor Yellow ">> Warning: '$OutputPath' does not exist. Creating one now..."
-        Write-host -ForegroundColor Gray "Creating '$OutputPath': " -NoNewline
-        try {
-            New-Item -ItemType "directory" -Path $OutputPath -ErrorAction Stop | Out-Null
-            Write-Host -ForegroundColor Green "Path '$OutputPath' has been created successfully"
-        }
-        catch {
-            write-host -ForegroundColor Red "FAILED to create '$OutputPath'"
-            Write-Host -ForegroundColor Red ">> ERROR: The directory '$OutputPath' could not be created."
-            Write-Host -ForegroundColor Red $error[0]
-        }
-    }
-    else{
-        Write-Host -ForegroundColor Green "Path '$OutputPath' already exists"
-    }
-    $JSONfilename = ("$($OutputPath)$($Subscription)_$($Date).json")
-    return $JSONfilename
-}
 
 
-#Generate the correct URI format and export  logs
-function outputToFile($TotalContentPages, $JSONfilename, $Headers){
-    $AuditResults = New-Object System.Collections.ArrayList
-    if($TotalContentPages.content.length -gt 2){
-        $uris = @()
-        $pages = $TotalContentPages.content.split(",")
-        
-        foreach($page in $pages){
-            if($page -match "contenturi"){
-                $uri = $page.split(":")[2] -replace """"
-                $uri = "https:$uri"
-                $uris += $uri
-            }
-        }
-        foreach($uri in $uris){
-            try{
-                $Logdata = Invoke-RestMethod -Uri $uri -Headers $Headers -Method Get
-                $AuditResults += $Logdata | Where-Object {(($_.RecordType -eq 2 -or $_.RecordType -eq 3 -or $_.RecordType -eq 19 -or $_.RecordType -eq 50) -and $_.UserId -match '^S-1-[0-59]-\d{2}-\d{8,10}-\d{8,10}-\d{8,10}-[1-9]\d{3}')}
-                $AuditResults | ConvertTo-Json -Depth 100 | Set-Content -Encoding UTF8 $JSONfilename
-            } catch {
-                write-host -ForegroundColor Red "ERROR"
-                Write-host $error[0]
-                return
-            }      
-        }
-        write-host -ForegroundColor Green "OK"
-    } else {
-        Write-Host -ForegroundColor Yellow "Nothing to output"
-    }
-}
+# Retrieve data for the number of days splitting the results by hours specified by interval
+$EndDate = Get-Date
+#$EndDate = (Get-Date).AddDays(-6)
+$StartDate = (Get-Date -Date $EndDate).AddDays(-$NumberOfDays)
+#$StartDate = (Get-Date -Date $EndDate).AddDays(-1)
+while($EndDate -gt $StartDate) {
+    $Hour = (New-TimeSpan -Minutes 60).Ticks
+    $EndTime = (Get-Date -Date $EndDate).ToUniversalTime()
+    $Ticks = ([Math]::Round($EndTime.Ticks / $Hour, 0) * $Hour) -as [long]
+    $EndTime = [datetime]$Ticks
+    $StartTime = $EndTime.AddHours(-$Interval)
+    $Script:EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
+    $Script:StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
+    $FileTimeStamp = '{0:yyyyMMddTHHmmssZ}' -f $StartTime
 
-Write-Host "Collecting and exporting log data..." -ForegroundColor Green
-foreach($Subscription in $Subscriptions){
+    Write-Host "Collecting and exporting log data..." -ForegroundColor Green
+    foreach($Subscription in $Subscriptions){
     
-    Write-Host "Collecting log data from $($Subscription): " -NoNewline -ForegroundColor Gray
-    $logs = buildLog $BaseURI $Subscription $TenantGUID $Headers
+        Write-Host "Collecting log data from $($Subscription) between $($StartTime) and $($EndTime): " -NoNewline -ForegroundColor Gray
+        $logs = buildLog $BaseURI $Subscription $TenantGUID $Headers
     
-    $JSONfileName = getFileName $Date $Subscription $outputPath
+        $JSONfileName = getFileName $Date $Subscription $outputPath $FileTimeStamp
   
-    Write-host "Exporting log data to $($JSONfilename):" -NoNewline -ForegroundColor Gray
-    outputToFile $logs $JSONfilename $Headers
+        Write-host "Exporting log data to $($JSONfilename)..." -NoNewline -ForegroundColor Gray
+        outputToFile $logs $JSONfilename $Headers
+    }
+    $EndDate = $EndDate.AddHours(-$Interval)
 }
