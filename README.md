@@ -1,23 +1,20 @@
-Find-ImpersonationUsers
+Graph-FindImpersonation
 
-The Find Impersonation Users script helps to find user accounts that are using the Exchange ApplicationImpersation role. It queries the Unified Audit Logs for Exchange events and filters for relevant results. The results can be used to help locate an applications that are leveraging the ApplicationImpersonation role prior to its retirement in Exchange Online.
+The Find Impersonation script helps to find user accounts that are using the Exchange ApplicationImpersation role. It queries the Unified Audit Logs for Exchange events and filters for relevant results. The results can be used to help locate an applications that are leveraging the ApplicationImpersonation role prior to its retirement in Exchange Online.
 
 Requirements
-The script requires an application registration in Entra ID that has the Office 365 Management APIs ActiveFeed.Read permission. The permission may be Application or Delegated type.
+The script requires an application registration in Entra ID that has the Graph API AuditLog.Read.All permission. The permission may be Application or Delegated type.
 
 Syntax
 
-This cmdlet will run the Find Impersonation User script using an application secret.
-.\Find-ImpersonationUsers.ps1 -PermissionType Application  -OAuthClientSecret $secret -OAuthClientId f733c1fb-e6d7-5e76-b542-33b5e4a604ca -OAuthTenantId 9101fc97-6cf6-4438-a1d7-83e051e52057 -OutputPath C:\Scripts\Results\
+This cmdlet will run the Find Impersonation script to create a new audit query.
+.\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OutputPath C:\Temp\Output\ -Scope AuditLog.Read.All -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -Operation NewAuditQuery -NumberOfDays 14
 
-This cmdlet will run the Find Impersonation User script using delegated permissions.
+This cmdlet will run the Find Impersonation script to check the audit query status. It may take several hours for a query to complete.
+.\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OutputPath C:\Temp\Output\ -Scope AuditLog.Read.All -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be -Operation CheckAuditQuery
 
-.\Find-ImpersonationUsers.ps1 -OAuthClientSecret $secret -PermissionType Delegated -OAuthClientId f733c1fb-e6d7-5e76-b542-33b5e4a604ca -OutputPath C:\Scripts\Results\ -Scope ActivityFeed.Read
-
-This cmdlet will run the Find Impersonation User script using a certificate.
-
-.\Find-ImpersonationUsers.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-5e76-b542-33b5e4a604ca -OAuthCertificate 6389EA02A19D671CAF9BFA03CA428FC7BB9AC16D -CertificateStore LocalMachine -OutputPath C:\Scripts\Results\
-
+This cmdlet will run the Find Impersonation script to retrieve the audit records and filter for EWS impersonation events.
+.\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OutputPath C:\Temp\Output\ -Scope AuditLog.Read.All -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be -Operation GetQueryResults
 Parameters
 
 OutputPath - The OutputPath parameter specifies the path for the output files.
@@ -34,8 +31,17 @@ OAuthRedirectUri - The OAuthRedirectUri parameter is the redirect Uri of the Azu
 
 OAuthClientSecret - The OAuthSecretKey parameter is the the secret for the registered application.
 
-OAuthCertificate - The OAuthCertificate parameter is the certificate for the registered application. Certificate auth requires MSAL libraries to be available.
+OAuthCertificate - The OAuthCertificate parameter is the certificate for the registered application.
 
 CertificateStore - The CertificateStore parameter specifies the certificate store where the certificate is loaded.
 
 Scope - The Scope parameter specifies the scope for the OAuth token request.
+
+AuditQueryId - The AuditQueryId parameter specifies the id for the audit query.
+
+Operation - The Operation specifies what action you want the script to perform.
+    NewAuditQuery - creates a new audit query for Exchange events
+    CheckAuditQuery - checks the status of the audit query using the audit id specified
+    GetQueryResults - retrieves the audit records from the audit query and filters for EWS impersonation events
+
+NumberOfDays - The NumberOfDays parameter specifies how many days in the past to query the audit logs.
