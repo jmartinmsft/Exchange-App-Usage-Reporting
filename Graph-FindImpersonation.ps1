@@ -22,7 +22,7 @@
     SOFTWARE
 #>
 
-# Version 24.10.30.1723
+# Version 24.10.31.0949
 
 param (
     [ValidateScript({ Test-Path $_ })]
@@ -1038,10 +1038,10 @@ if($Operation -eq "NewAuditQuery") {
     try{
         Write-Host "Attempting to create a new audit query..." -ForegroundColor Cyan -NoNewline
         $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries" -AccessToken $Script:Token -Method POST -Body $Body -Endpoint beta # | Out-Null
-        $auditQuery = ($q.Response.Content | ConvertFrom-Json).id
+        [string]$auditQuery = ($q.Response.Content | ConvertFrom-Json).id
         Write-Host "OK" -ForegroundColor Green
         $CSVfilename = getFileName $outputPath
-        $auditQuery | Export-Csv $CSVfilename -NoTypeInformation
+        @{auditQueryId=$auditQuery} | Export-Csv $CSVfilename -NoTypeInformation
     }
     catch {
         Write-Host "FAILED" -ForegroundColor Red
