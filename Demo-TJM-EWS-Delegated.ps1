@@ -18,6 +18,9 @@
 param(
     [Parameter(Mandatory=$false, HelpMessage="Number of message the script should send.")] [string] $MailboxName='thanos@thejimmartin.com',
     [Parameter(Mandatory=$false, HelpMessage="Number of message the script should send.")] [string] $FolderName='Inbox',
+    [ValidateSet("MailItemsAccessed", "SoftDelete", "HardDelete")]
+    [Parameter(Mandatory = $false)]
+    [string]$Operation = "MailItemsAccessed",
     [Parameter(Mandatory=$false, HelpMessage="Number of message the script should send.")] [string] $OAuthClientId='2f79178b-54c3-4e81-83a0-a7d16010a424',
     [Parameter(Mandatory=$false, HelpMessage="The OAuthTenantId parameter specifies the the tenant ID for the OAuth token request.")][string] $OAuthTenantId,
     [Parameter(Mandatory=$False,HelpMessage="The OAuthRedirectUri specifies the redirect Uri of the Azure registered application.")][string] $OAuthRedirectUri = "https://login.microsoftonline.com/common/oauth2/nativeclient",
@@ -158,8 +161,14 @@ catch {
         $ivItemView = New-Object Microsoft.Exchange.WebServices.Data.ItemView(15)  
         $fiResult = $MailboxFolder.FindItems($ivItemView)
         foreach($Item in $fiResult.Items){  
-            $Item.Subject
-            $ItemBind = [Microsoft.Exchange.WebServices.data.Item]::Bind($service, $item.Id,$script:RequiredPropSet)
+            #$Item.Subject
+            #$ItemBind = [Microsoft.Exchange.WebServices.data.Item]::Bind($service, $item.Id,$script:RequiredPropSet)
         }
-        #$Item.Delete([Microsoft.Exchange.WebServices.Data.DeleteMode]::SoftDelete)
+        write-host $Item.Subject
+        switch($Operation) {
+            "MailItemsAccessed" {[Microsoft.Exchange.WebServices.data.Item]::Bind($service, $item.Id,$script:RequiredPropSet) | Out-Null}
+            "SoftDelete" {$Item.Delete([Microsoft.Exchange.WebServices.Data.DeleteMode]::SoftDelete)}
+            "HardDelete" {$Item.Delete([Microsoft.Exchange.WebServices.Data.DeleteMode]::HardDelete)}
+        }
+        
         #endregion
