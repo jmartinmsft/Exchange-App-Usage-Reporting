@@ -15,15 +15,15 @@ The script requires an application registration in Entra ID that has the Graph A
 ## Usage
 Step 1: Create the new audit log query:
 ```powershell
-.\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OutputPath C:\Temp\Output\ -Scope AuditLog.Read.All -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -Operation NewAuditQuery -StartDate (Get-Date).AddDays(-14) -EndDate (Get-Date)
+.\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -Operation NewAuditQuery -StartDate (Get-Date).AddDays(-14) -EndDate (Get-Date)
 ```
 Step 2: Check the status of the audit log query until it shows succeeded:
 ```powershell
-.\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OutputPath C:\Temp\Output\ -Scope AuditLog.Read.All -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be -Operation CheckAuditQuery
+.\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -Operation CheckAuditQuery -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be
 ```
 Step 3: Retrieve the list of records from the audit log query:
 ```powershell
-.\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OutputPath C:\Temp\Output\ -Scope AuditLog.Read.All -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be -Operation GetQueryResults
+.\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -Operation GetQueryResults -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be
 ```
 
 ## Parameters
