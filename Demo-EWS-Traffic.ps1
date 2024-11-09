@@ -22,7 +22,7 @@ param(
     [Parameter(Mandatory=$false, HelpMessage="The FolderName parameter specfies the folder to be accessed.")]
     [string] $FolderName='Inbox',
 
-    [ValidateSet("MailItemsAccessed", "SoftDelete", "HardDelete","Update")]
+    [ValidateSet("MailItemsAccessed", "MoveToDeletedItems", "SoftDelete", "HardDelete","Update","Send")]
     [Parameter(Mandatory = $false, HelpMessage="The Operation parameter specifies the action to be taken against the item.")]
     [string]$Operation = "MailItemsAccessed",
 
@@ -177,20 +177,49 @@ catch {
 #endregion
 
 #region GetItems
-$ivItemView = New-Object Microsoft.Exchange.WebServices.Data.ItemView(15)  
-$fiResult = $MailboxFolder.FindItems($ivItemView)
-foreach($Item in $fiResult.Items){  
+$ivItemView = New-Object Microsoft.Exchange.WebServices.Data.ItemView(1)  
+$Item = $MailboxFolder.FindItems($ivItemView)
+#foreach($Item in $fiResult.Items){  
     #$Item.Subject
     #$ItemBind = [Microsoft.Exchange.WebServices.data.Item]::Bind($service, $item.Id,$script:RequiredPropSet)
+#}
+if($Operation -ne "Send") {
+    Write-Host "Action is being taken against the message with the subject '$($Item.Subject)'."
 }
-write-host $Item.Subject
 switch($Operation) {
     "MailItemsAccessed" {[Microsoft.Exchange.WebServices.data.Item]::Bind($service, $item.Id,$script:RequiredPropSet) | Out-Null}
+    "MoveToDeletedItems" {$Item.Delete([Microsoft.Exchange.WebServices.Data.DeleteMode]::MoveToDeletedItems)}
     "SoftDelete" {$Item.Delete([Microsoft.Exchange.WebServices.Data.DeleteMode]::SoftDelete)}
     "HardDelete" {$Item.Delete([Microsoft.Exchange.WebServices.Data.DeleteMode]::HardDelete)}
     "Update" {
         $Item.IsRead = $true
         $Item.Update([Microsoft.Exchange.WebServices.Data.ConflictResolutionMode]::AlwaysOverwrite)
+    }
+    "Send" {
+        $SentItemsId= New-Object Microsoft.Exchange.WebServices.Data.FolderId([Microsoft.Exchange.WebServices.Data.WellKnownFolderName]::SentItems,$MailboxName)
+        try {
+            $SentItemsFolder = [Microsoft.Exchange.WebServices.Data.Folder]::Bind($service,$SentItemsId)
+        }
+        catch { 
+            Write-Warning "Unable to connect to the Sent Items folder for $($MailboxName)"; 
+            exit
+        }
+        $message = New-Object Microsoft.Exchange.WebServices.Data.EmailMessage -ArgumentList $service
+        $message.Subject = "Test message sent using EWS"
+        $message.Body = "This message was sent using EWS on $(Get-Date)."
+        $message.ToRecipients.Add($MailboxName)
+        $message.SendAndSaveCopy($SentItemsFolder.Id) | Out-Null
+    }
+    "Move" {
+        $DeletedItemsId = New-Object Microsoft.Exchange.WebServices.Data.FolderId([Microsoft.Exchange.WebServices.Data.WellKnownFolderName]::DeletedItems,$MailboxName)
+        try {
+            $DeletedItemsFolder = [Microsoft.Exchange.WebServices.Data.Folder]::Bind($service,$DeletedItemsId)
+        }
+        catch { 
+            Write-Warning "Unable to connect to the Deleted Items folder for $($MailboxName)"; 
+            exit
+        }
+        $Item.Move($DeletedItemsFolder.Id) | Out-Null
     }
 }
 #endregion
