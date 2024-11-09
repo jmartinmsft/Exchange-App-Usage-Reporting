@@ -1,21 +1,32 @@
-Graph-FindImpersonation
+**Graph-FindImpersonation**
 
-The Find Impersonation script helps to find user accounts that are using the Exchange ApplicationImpersation role. It queries the Unified Audit Logs for Exchange events and filters for relevant results. The results can be used to help locate an applications that are leveraging the ApplicationImpersonation role prior to its retirement in Exchange Online.
+Report of users leveraging the ApplicationImpersonation RBAC role with third party EWS applications.
 
-Requirements
-The script requires an application registration in Entra ID that has the Graph API AuditLog.Read.All permission. The permission may be Application or Delegated type.
+# Description:
+This script must be run a minimum of three times to get the report. Each run requires a different value for the Operation parameter. Here's a high-level overview of the the steps and what they do:
 
-Syntax
+1. NewAuditQuery - Uses the Graph API to create a new audit log query in the tenant for Exchange mailbox events.
+2. CheckAuditQuery - Checks the status of the audit log query to determine when it has succeeeded. The audit query ID from the NewAuditQuery should be provided.
+3. GetQueryResults - Uses the Graph API to retrieve the audit records from the query and filter for the ApplicationImpersonation events. The results are outputed into a CSV file to the path specified in the command.
 
-This cmdlet will run the Find Impersonation script to create a new audit query.
+# Requirements:
+The script requires an application registration in Entra ID that has the Graph API AuditLogsQuery.Read.All permission. The permission may be Application or Delegated type.
+
+# Usage:
+Step 1: Create the new audit log query:
+```powershell
 .\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OutputPath C:\Temp\Output\ -Scope AuditLog.Read.All -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -Operation NewAuditQuery -StartDate (Get-Date).AddDays(-14) -EndDate (Get-Date)
-
-This cmdlet will run the Find Impersonation script to check the audit query status. It may take several hours for a query to complete.
+```
+Step 2: Check the status of the audit log query until it shows succeeded:
+```powershell
 .\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OutputPath C:\Temp\Output\ -Scope AuditLog.Read.All -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be -Operation CheckAuditQuery
-
-This cmdlet will run the Find Impersonation script to retrieve the audit records and filter for EWS impersonation events.
+```
+Step 3: Retrieve the list of records from the audit log query:
+```powershell
 .\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId f733c1fb-e6d7-4d65-b542-33b5e4a604ca -OutputPath C:\Temp\Output\ -Scope AuditLog.Read.All -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be -Operation GetQueryResults
-Parameters
+```
+
+# Parameters:
 
 OutputPath - The OutputPath parameter specifies the path for the output files.
 
