@@ -17,17 +17,17 @@
 # Version 2024.11.08.1530
 param(
     [Parameter(Mandatory=$false, HelpMessage="The MailboxName parameter specifies the mailbox to be accessed.")]
-    [string] $MailboxName='thanos@thejimmartin.com',
+    [string] $MailboxName,
 
     [Parameter(Mandatory=$false, HelpMessage="The FolderName parameter specfies the folder to be accessed.")]
     [string] $FolderName='Inbox',
 
-    [ValidateSet("MailItemsAccessed", "MoveToDeletedItems", "SoftDelete", "HardDelete","Update","Send")]
+    [ValidateSet("MailItemsAccessed", "MoveToDeletedItems", "SoftDelete", "HardDelete","Update","Send","Move")]
     [Parameter(Mandatory = $false, HelpMessage="The Operation parameter specifies the action to be taken against the item.")]
     [string]$Operation = "MailItemsAccessed",
 
     [Parameter(Mandatory=$false, HelpMessage="The OAuthClientId parameter specifies the app ID for the OAuth token request.")]
-    [string]$OAuthClientId='2f79178b-54c3-4e81-83a0-a7d16010a424',
+    [string]$OAuthClientId,
 
     [Parameter(Mandatory=$false, HelpMessage="The OAuthTenantId parameter specifies the the tenant ID for the OAuth token request.")]
     [string]$OAuthTenantId,
