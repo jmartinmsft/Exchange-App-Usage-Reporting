@@ -30,11 +30,19 @@ Permanently delete a message from the Inbox as the mailbox owner
 
 ## Parameters
 **OutputPath** - The OutputPath parameter specifies the path for the output files.
+
 **MailboxName** - The MailboxName parameter specifies the mailbox to be accessed.
+
 **FolderName** - The FolderName parameter specfies the folder to be accessed.
+
 **Operation** - The Operation parameter specifies the action to be taken against the item. Valid values for this parameter include: MailItemsAccessed, MoveToDeletedItems, SoftDelete, HardDelete, Update, Send, Move
+
 **OAuthClientId** - The OAuthClientId parameter specifies the app ID for the OAuth token request.
+
 **OAuthTenantId** - The OAuthTenantId parameter specifies the the tenant ID for the OAuth token request.
+
 **OAuthRedirectUri** - The OAuthRedirectUri specifies the redirect Uri of the Azure registered application.
+
 **UserAgent** - The UserAgent parameter specifies the user agent passed in the request.
+
 **UseImpersonation** The UseImpersonation switch specifies whether the request should use impersonation.
