@@ -18,6 +18,7 @@ To use delegated permissions a Redirect URI must be configured for Mobile and de
 Step 1: Create the new audit log query using application permission:
 ```powershell
 .\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -Operation NewAuditQuery -StartDate (Get-Date).AddDays(-14) -EndDate (Get-Date)
+```
 Step 1: Create the new audit log query using delegated permission:
 ```powershell
 .\Graph-FindImpersonation.ps1 -PermissionType Delegated -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -Operation NewAuditQuery
