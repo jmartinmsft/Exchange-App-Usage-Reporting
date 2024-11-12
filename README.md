@@ -23,7 +23,6 @@ Step 1: Create the new audit log query using delegated permission:
 ```powershell
 .\Graph-FindImpersonation.ps1 -PermissionType Delegated -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -Operation NewAuditQuery
 ```
-```powershell
 Step 2: Check the status of the audit log query until it shows succeeded:
 ```powershell
 .\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -Operation CheckAuditQuery -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be
