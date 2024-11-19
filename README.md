@@ -15,9 +15,14 @@ The script requires an application registration in Entra ID that has the Graph A
 To use delegated permissions a Redirect URI must be configured for Mobile and desktop applications with the value http://localhost:8004.
 
 ## Usage
-Step 1: Create the new audit log query using application permission:
+Step 1: Create the new audit log query using application permission with a certificate:
 ```powershell
 .\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -Operation NewAuditQuery -StartDate (Get-Date).AddDays(-14) -EndDate (Get-Date)
+```
+Step 1: Create the new audit log query using application permission with a secret:
+```powershell
+$secret = ConvertTo-SecureString "XXXXXXXXXXXXXXXXXXX" -AsPlainText -Force
+.\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthClientSecret $secret -Operation NewAuditQuery -StartDate (Get-Date).AddDays(-14) -EndDate (Get-Date)
 ```
 Step 1: Create the new audit log query using delegated permission:
 ```powershell
