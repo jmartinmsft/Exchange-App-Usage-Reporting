@@ -14,19 +14,14 @@ The script requires an application registration in Entra ID that has the Graph A
 
 To use delegated permissions a Redirect URI must be configured for Mobile and desktop applications with the value http://localhost:8004.
 
-## Usage
-Step 1: Create the new audit log query using application permission with a certificate:
+## Query for a single user
+A query can be performed for a single user with the impersonation role using the **AdminSid** parameter. This can be used to verfiy an account is no longer using impersonation. It can also be used to create queries with a smaller set of records to be retrieved.
+
+## Application permission usage
+### Using a certificate
+Step 1: Create the new audit log query:
 ```powershell
-.\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -Operation NewAuditQuery -StartDate (Get-Date).AddDays(-14) -EndDate (Get-Date)
-```
-Step 1: Create the new audit log query using application permission with a secret:
-```powershell
-$secret = ConvertTo-SecureString "XXXXXXXXXXXXXXXXXXX" -AsPlainText -Force
-.\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthClientSecret $secret -Operation NewAuditQuery -StartDate (Get-Date).AddDays(-14) -EndDate (Get-Date)
-```
-Step 1: Create the new audit log query using delegated permission:
-```powershell
-.\Graph-FindImpersonation.ps1 -PermissionType Delegated -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -Operation NewAuditQuery
+.\Graph-FindImpersonation.ps1 -Name AllResults -PermissionType Application -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -Operation NewAuditQuery -StartDate (Get-Date).AddDays(-14) -EndDate (Get-Date)
 ```
 Step 2: Check the status of the audit log query until it shows succeeded:
 ```powershell
@@ -37,7 +32,43 @@ Step 3: Retrieve the list of records from the audit log query:
 .\Graph-FindImpersonation.ps1 -PermissionType Application -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 24DCA626D48EE1383623FF26E6C8D852442D1DDC -CertificateStore CurrentUser -Operation GetQueryResults -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be
 ```
 
+### Using a secret
+Step 1: Create the new audit log query:
+```powershell
+$secret = ConvertTo-SecureString "XXXXXXXXXXXXXXXXXXX" -AsPlainText -Force
+.\Graph-FindImpersonation.ps1 -Name AllResults -PermissionType Application -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthClientSecret $secret -Operation NewAuditQuery -StartDate (Get-Date).AddDays(-14) -EndDate (Get-Date)
+```
+Step 2: Check the status of the audit log query until it shows succeeded:
+```powershell
+.\Graph-FindImpersonation.ps1 -Name AllResults -PermissionType Application -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthClientSecret $secret -Operation CheckAuditQuery -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be
+```
+Step 3: Retrieve the list of records from the audit log query:
+```powershell
+.\Graph-FindImpersonation.ps1 -Name AllResults -PermissionType Application -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthClientSecret $secret -Operation GetQueryResults -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be
+```
+
+## Delegate permission usage
+Step 1: Create the new audit log query using delegated permission:
+```powershell
+.\Graph-FindImpersonation.ps1 -Name AllResults -PermissionType Delegated -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -Operation NewAuditQuery
+```
+Step 2: Check the status of the audit log query until it shows succeeded:
+```powershell
+.\Graph-FindImpersonation.ps1 -Name AllResults -PermissionType Delegated -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -Operation CheckAuditQuery -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be
+```
+Step 3: Retrieve the list of records from the audit log query:
+```powershell
+.\Graph-FindImpersonation.ps1 -Name AllResults -PermissionType Delegated -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -Operation GetQueryResults -AuditQueryId ddc85df1-d5d1-4989-8d25-d7ba3c0bd2be
+```
+
+## Query for single user
+```powershell
+.\Graph-FindImpersonation.ps1 -Name JMartin -PermissionType Application -OAuthClientId 5c4abea3-43e5-4220-a35a-bb344d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthClientSecret $secret -Operation NewAuditQuery -StartDate (Get-Date).AddDays(-14) -EndDate (Get-Date) -AdminSid S-1-5-21-3145204594-529760289-3943512046-19014454
+```
+
 ## Parameters
+
+**Name** - The Name parameter specifies the name for the query and value to be appended to the output file.
 
 **OutputPath** - The OutputPath parameter specifies the path for the output files.
 
@@ -69,3 +100,5 @@ Step 3: Retrieve the list of records from the audit log query:
 **StartDate** - The StartDate parameter specifies the start date for the audit query.
 
 **EndDate** - The EndDate parameter specifies the end date for the audit query.
+
+**AdminSid** The AdminSid parameter specifies security description (SID) of the user with impersonation right.
