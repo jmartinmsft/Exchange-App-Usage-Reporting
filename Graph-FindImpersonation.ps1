@@ -22,9 +22,12 @@
     SOFTWARE
 #>
 
-# Version 24.11.13.0905
+# Version 24.11.21.0618
 
 param (
+    [Parameter(Mandatory=$true,HelpMessage="The Name parameter specifies the name for the query and value to be appended to the output file.")]
+    [string]$Name,
+
     [ValidateScript({ Test-Path $_ })]
     [Parameter(Mandatory = $true, HelpMessage="The OutputPath parameter specifies the path for the EWS usage report.")]
     [string] $OutputPath,
@@ -34,12 +37,12 @@ param (
     [string]$AzureEnvironment = "Global",
 
     [Parameter(Mandatory=$false, HelpMessage="The PermissionType parameter specifies whether the app registrations uses delegated or application permissions")] [ValidateSet('Application','Delegated')]
-    [string]$PermissionType,
+    [string]$PermissionType="Application",
     
-    [Parameter(Mandatory=$False,HelpMessage="The OAuthClientId parameter is the Azure Application Id that this script uses to obtain the OAuth token.  Must be registered in Azure AD.")] 
+    [Parameter(Mandatory=$true,HelpMessage="The OAuthClientId parameter is the Azure Application Id that this script uses to obtain the OAuth token.  Must be registered in Azure AD.")] 
     [string]$OAuthClientId,
     
-    [Parameter(Mandatory=$False,HelpMessage="The OAuthTenantId parameter is the tenant Id where the application is registered (Must be in the same tenant as mailbox being accessed).")] 
+    [Parameter(Mandatory=$true,HelpMessage="The OAuthTenantId parameter is the tenant Id where the application is registered (Must be in the same tenant as mailbox being accessed).")] 
     [string]$OAuthTenantId,
     
     [Parameter(Mandatory=$False,HelpMessage="The OAuthRedirectUri parameter is the redirect Uri of the Azure registered application.")] 
@@ -56,19 +59,22 @@ param (
 
     [Parameter(Mandatory=$false)] [object]$Scope= @("AuditLogsQuery.Read.All"),
     
-    [Parameter(Mandatory=$False)]
+    [Parameter(Mandatory=$False,HelpMessage="The AuditQueryId parameter specifies the query ID.")]
     [string]$AuditQueryId,
 
-    [Parameter(Mandatory=$true)] [ValidateSet("NewAuditQuery", "CheckAuditQuery","GetQueryResults","CovertSidsToUpn","ListQueries","GetApplicationName")]
+    [Parameter(Mandatory=$true,HelpMessage="The Operation parameter specifies the operation the script should perform.")] [ValidateSet("NewAuditQuery", "CheckAuditQuery","GetQueryResults","CovertSidsToUpn","ListQueries","GetApplicationName")]
     [string]$Operation = $null,
 
-    [Parameter(Mandatory=$False)]
+    [Parameter(Mandatory=$False,HelpMessage="The StartDate parameter specifies start date for the audit log query.")]
     [datetime]$StartDate=(Get-Date).AddDays(-7),
 
-    [Parameter(Mandatory=$False)]
-    [datetime]$EndDate=(Get-Date)
-)
+    [Parameter(Mandatory=$False,HelpMessage="The EndDate parameter specifies the end date for the audit log query.")]
+    [datetime]$EndDate=(Get-Date),
 
+    [Parameter(Mandatory=$false,HelpMessage="The AdminSid parameter specifies security description (SID) of the user with impersonation right.")]
+    [ValidatePattern("^S-1-[0-5]-\d{2}-\d{8,10}-\d{8,10}-\d{8,10}-[1-9]\d{3}")]
+    [string]$AdminSid
+)
 
 function Get-CloudServiceEndpoint {
     [CmdletBinding()]
@@ -1001,14 +1007,38 @@ function getFileName{
     else{
         Write-Verbose "Path '$OutputPath' already exists"
     }
-    
-    $CSVfilename = ("$($OutputPath)Ews-Impersonation-Results.csv")
+    if([string]::IsNullOrEmpty($Name)){
+        $CSVfilename = "$($OutputPath)Ews-Impersonation-Results.csv"
+    }
+    else{
+        $CSVfilename = "$($OutputPath)Ews-Impersonation-Results-$($Name).csv"
+    }
     if((Test-Path($CSVfilename)) -and $Operation -like "*Query*") {
         Remove-Item $CSVfilename -Confirm:$false -Force
     }
     return $CSVfilename
 }
 
+function CreateAuditQuery{
+    param(
+        [Parameter(Mandatory=$false)]
+        [string]$Admin
+    )
+    try{
+        Write-Host "Attempting to create a new audit query..." -ForegroundColor Cyan -NoNewline
+        $Body = $Body | ConvertTo-JSON -Depth 6
+        $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries" -AccessToken $Script:Token -Method POST -Body $Body -Endpoint beta # | Out-Null
+        [string]$auditQuery = ($q.Response.Content | ConvertFrom-Json).id
+        Write-Host "OK" -ForegroundColor Green
+        $CSVfilename = getFileName -OutputPath $outputPath
+        @{auditQueryId=$auditQuery} | Export-Csv $CSVfilename -NoTypeInformation
+    }
+    catch {
+        Write-Host "FAILED" -ForegroundColor Red
+        Write-Host "Failed to create the audit query." -ForegroundColor Red
+    }
+    Write-Host "New audit log query created with the id: $($auditQuery)"
+}
 
 $cloudService = Get-CloudServiceEndpoint $AzureEnvironment
 $azureADEndpoint = $cloudService.AzureADEndpoint
@@ -1031,29 +1061,22 @@ switch($Operation) {
         $StartTime = [datetime]$Ticks
         $EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
         $StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
-    
-        $Body = (@{
+        $Body = @{
             "@odata.type" = "#microsoft.graph.security.auditLogQuery"
             filterStartDateTime = $StartSearch
             filterEndDateTime = $EndSearch
-            displayName = "Audit-query-$(($Endtime-$StartTime).Days)-Days-From-$(Get-Date -Date $StartDate -f 'yyyyMMdd')"
+            displayName = "Audit-query-$($Name)"
             recordTypeFilters = @("exchangeItem","exchangeAggregatedOperation","exchangeItemAggregated","exchangeItemGroup")
-            operationsFilters = @("MailItemAccessed","UpdateCalendarDelegation","Copy","Create","SoftDelete","Move","MoveToDeletedItems","HardDelete","Send","SendAs","SendOnBehalf","Update")
-        }) | ConvertTo-JSON -Depth 6
-
-        try{
-            Write-Host "Attempting to create a new audit query..." -ForegroundColor Cyan -NoNewline
-            $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries" -AccessToken $Script:Token -Method POST -Body $Body -Endpoint beta # | Out-Null
-            [string]$auditQuery = ($q.Response.Content | ConvertFrom-Json).id
-            Write-Host "OK" -ForegroundColor Green
-            $CSVfilename = getFileName $outputPath
-            @{auditQueryId=$auditQuery} | Export-Csv $CSVfilename -NoTypeInformation
+            #operationsFilters = @("MailItemAccessed","UpdateCalendarDelegation","Copy","Create","SoftDelete","Move","MoveToDeletedItems","HardDelete","Send","SendAs","SendOnBehalf","Update")
         }
-        catch {
-            Write-Host "FAILED" -ForegroundColor Red
-            Write-Host "Failed to create the audit query." -ForegroundColor Red
+        # Check if query is for a specific admin account
+        if(-not([string]::IsNullOrEmpty($AdminSid))){
+            $Body.Add("keywordFilter",$AdminSid)
+            CreateAuditQuery
         }
-        Write-Host "New audit log query created with the id: $($auditQuery)"
+        else{
+            CreateAuditQuery
+        }
         exit
     }
     "CheckAuditQuery" {
@@ -1069,7 +1092,9 @@ switch($Operation) {
             Write-Host $q.content.status -ForegroundColor Green
             $CSVfilename = getFileName $outputPath
             Write-Host "Attempting to get the audit log records for EWS impersonation." -ForegroundColor Cyan -NoNewline
+            # Retrieve 1000 records per request instead of the default 150
             $r = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries/$($AuditQueryId)/records?`$top=1000" -AccessToken $Script:Token -Method GET -Endpoint beta
+            # Filter the records for impersonation
             $r.Content.value | Select-Object -ExpandProperty AuditData | Where-Object {($_.UserId -match '^S-1-[0-59]-\d{2}-\d{8,10}-\d{8,10}-\d{8,10}-[1-9]\d{3}' -and $_.LogonType -eq 1)} | Select-Object -ExcludeProperty "@odata.type", MailboxOwnerSid, AppAccessContext | Export-Csv $CSVfilename -NoTypeInformation
             while($null -ne $r.Content.'@odata.nextLink'){
                 $Query = $r.Content.'@odata.nextLink'.Substring($r.Content.'@odata.nextLink'.IndexOf("security"))
@@ -1083,6 +1108,7 @@ switch($Operation) {
         }
     }
     "CovertSidsToUpn" {
+        # Check for EXO remote PowerShell to retrieve user SIDs
         if(-not(Get-Command Get-CASMailbox -ErrorAction Ignore)){
             Write-Host "Connection to Exchange Online not found." -ForegroundColor Yellow
             if(-not(Get-InstalledModule -Name ExchangeOnlineManagement -ErrorAction Ignore)){
@@ -1099,6 +1125,7 @@ switch($Operation) {
                 Write-Host "Unable to connect to Exchange Online." -ForegroundColor Red
             }
         }
+        # Filter the list of SIDs for unique value to lookup
         $CSVfilename = getFileName $outputPath
         while(-not(Test-Path $CSVfilename)){
             $CSVfilename = Read-Host "Enter the full path to the Ews-Impersonation-Results.csv "
@@ -1107,6 +1134,7 @@ switch($Operation) {
             }
         }
         $LogonUserSids = (Import-Csv $CSVfilename).LogonUserSid | Sort-Object -Unique
+        # Retrieve the user principal name for each SID
         Write-Host "Getting the UserPrincipalName value for each LogonUserSid." -ForegroundColor Cyan
         foreach($Sid in $LogonUserSids) {
             $Upn = (Get-User $Sid).UserPrincipalName
@@ -1115,6 +1143,7 @@ switch($Operation) {
                 Upn = $Upn
             })
         }
+        # Replace the SID value with the UPN
         Write-Host "Updating the CSV file by replacing the SID values with the UPN values." -ForegroundColor Cyan
         foreach($user in $SidToUserName){
             (Get-Content $CSVfilename).Replace($user.Sid, $user.Upn) | Set-Content $CSVfilename
@@ -1126,6 +1155,7 @@ switch($Operation) {
         $q.content.value
     }
     "GetApplicationName" {
+        # Filter the app IDs for unique values
         $CSVfilename = getFileName $outputPath
         while(-not(Test-Path $CSVfilename)){
             $CSVfilename = Read-Host "Enter the full path to the Ews-Impersonation-Results.csv "
@@ -1134,6 +1164,7 @@ switch($Operation) {
             }
         }
         $Applications = (Import-Csv $CSVfilename).AppId | Sort-Object -Unique
+        # Retrieve the application name for each app Id
         Write-Host "Getting the application name for each AppId." -ForegroundColor Cyan
         foreach($app in $Applications) {
             [string]$Query = "applications(appId='$($app)')"
@@ -1144,10 +1175,10 @@ switch($Operation) {
 }
 
 # SIG # Begin signature block
-# MIIoRQYJKoZIhvcNAQcCoIIoNjCCKDICAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIIoSAYJKoZIhvcNAQcCoIIoOTCCKDUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCD5wV/63dG4euCe
-# AfxNEsJg/dA1W5oS6x816e3V4sWaQKCCDXYwggX0MIID3KADAgECAhMzAAAEBGx0
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCVBpdHbK/dUJxX
+# ibNBoGCJYbJycSGUjTVlDvIdvluPvKCCDXYwggX0MIID3KADAgECAhMzAAAEBGx0
 # Bv9XKydyAAAAAAQEMA0GCSqGSIb3DQEBCwUAMH4xCzAJBgNVBAYTAlVTMRMwEQYD
 # VQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNy
 # b3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBDb2RlIFNpZ25p
@@ -1219,67 +1250,67 @@ switch($Operation) {
 # XJbYANahRr1Z85elCUtIEJmAH9AAKcWxm6U/RXceNcbSoqKfenoi+kiVH6v7RyOA
 # 9Z74v2u3S5fi63V4GuzqN5l5GEv/1rMjaHXmr/r8i+sLgOppO6/8MO0ETI7f33Vt
 # Y5E90Z1WTk+/gFcioXgRMiF670EKsT/7qMykXcGhiJtXcVZOSEXAQsmbdlsKgEhr
-# /Xmfwb1tbWrJUnMTDXpQzTGCGiUwghohAgEBMIGVMH4xCzAJBgNVBAYTAlVTMRMw
+# /Xmfwb1tbWrJUnMTDXpQzTGCGigwghokAgEBMIGVMH4xCzAJBgNVBAYTAlVTMRMw
 # EQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVN
 # aWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBDb2RlIFNp
 # Z25pbmcgUENBIDIwMTECEzMAAAQEbHQG/1crJ3IAAAAABAQwDQYJYIZIAWUDBAIB
 # BQCggbAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEO
-# MAwGCisGAQQBgjcCARUwLwYJKoZIhvcNAQkEMSIEIO7rT+vZlfyVrhc0a9NzAhYl
-# 2I78UXac//ecM5MANfBQMEQGCisGAQQBgjcCAQwxNjA0oBSAEgBNAGkAYwByAG8A
+# MAwGCisGAQQBgjcCARUwLwYJKoZIhvcNAQkEMSIEIO8IJvx08xumXiBqJeJ00+0z
+# FDQHEZHd0wNv5JhJBQQWMEQGCisGAQQBgjcCAQwxNjA0oBSAEgBNAGkAYwByAG8A
 # cwBvAGYAdKEcgBpodHRwczovL3d3dy5taWNyb3NvZnQuY29tIDANBgkqhkiG9w0B
-# AQEFAASCAQBf0wHbK1r9NzTQqXdeDiN1jwIWN2o3z7+XfCeSGNINGOdpzXlNdWoP
-# Lnn8UpKSfzF5F6oLWtbpcGtLyudo7cP7a19mLM1Dw8qhKvT66XYhaX6AnASBME9n
-# CQS9D1j2ISewj1lCXrzAOiFqur2Sg0PxDFYJ5u88RPOWN15DzYnOzVNqruRMXyRZ
-# vczi+I0yxQZ7nUPUBPb7RJDKuROMqxmyaSQ8eCwQvrVdoipn1KysZS3/eh7JlRjR
-# uMn/NfqzVYJx+RmJmLojeJXFJEj3NpCYc7ATSxZNFWEdt98K2kMM317M6PVPAsnC
-# aUHIH4ndfZKOh6uBh9MxhSFBoL3JNx6QoYIXrTCCF6kGCisGAQQBgjcDAwExgheZ
-# MIIXlQYJKoZIhvcNAQcCoIIXhjCCF4ICAQMxDzANBglghkgBZQMEAgEFADCCAVoG
+# AQEFAASCAQCJeUyes12JTHamozV3E2aUXW+IbBt/46yWd6mccXQ6Yc355NRlvXn5
+# lKESz5dV5Dg0gPVAe/OWD5sJwwHf8bEQpe/X8/9Rb7bsfaVw5paujTlIBv/RL4l/
+# Yo/FNk+7latlIlXwAV/NBSWv8je5WZv91Z2Ua1Sj7/rCE9zztHCy0i1KPdc+DS/B
+# GQdqyOiQdxYqmNod4HcDZajHGxqiNarZrKEnaR1wo2rQtX1GersrKz9i9uwT8lyW
+# HqA2CtnE6Jmzjk+y2hN+m8nCR+e14AavHEGGrZ1RODf04XSC18MwAQX8Q0BboDlJ
+# uP8CDfBNtnAZzB275R73nxF0BCpIoBCsoYIXsDCCF6wGCisGAQQBgjcDAwExghec
+# MIIXmAYJKoZIhvcNAQcCoIIXiTCCF4UCAQMxDzANBglghkgBZQMEAgEFADCCAVoG
 # CyqGSIb3DQEJEAEEoIIBSQSCAUUwggFBAgEBBgorBgEEAYRZCgMBMDEwDQYJYIZI
-# AWUDBAIBBQAEIPBK4pzrozd+jk/ocCnMAb8qUzDW3/kCOR2Cf7VD9XEnAgZm60yu
-# 7AAYEzIwMjQxMTE4MTU1MDA1LjU3MVowBIACAfSggdmkgdYwgdMxCzAJBgNVBAYT
+# AWUDBAIBBQAEIEN43RlopSQ7R7nGirOc/wVwbe3PB58BKoupMhjO/P4uAgZnO8Md
+# Ry4YEzIwMjQxMTIxMTM0MDA5LjE1N1owBIACAfSggdmkgdYwgdMxCzAJBgNVBAYT
 # AlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xLTArBgNVBAsTJE1pY3Jvc29mdCBJ
 # cmVsYW5kIE9wZXJhdGlvbnMgTGltaXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1Mg
-# RVNOOjRDMUEtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFt
-# cCBTZXJ2aWNloIIR+zCCBygwggUQoAMCAQICEzMAAAH/Ejh898Fl1qEAAQAAAf8w
+# RVNOOjU3MUEtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFt
+# cCBTZXJ2aWNloIIR/jCCBygwggUQoAMCAQICEzMAAAH7y8tsN2flMJUAAQAAAfsw
 # DQYJKoZIhvcNAQELBQAwfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0
 # b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3Jh
 # dGlvbjEmMCQGA1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTAwHhcN
-# MjQwNzI1MTgzMTE5WhcNMjUxMDIyMTgzMTE5WjCB0zELMAkGA1UEBhMCVVMxEzAR
+# MjQwNzI1MTgzMTEzWhcNMjUxMDIyMTgzMTEzWjCB0zELMAkGA1UEBhMCVVMxEzAR
 # BgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1p
 # Y3Jvc29mdCBDb3Jwb3JhdGlvbjEtMCsGA1UECxMkTWljcm9zb2Z0IElyZWxhbmQg
-# T3BlcmF0aW9ucyBMaW1pdGVkMScwJQYDVQQLEx5uU2hpZWxkIFRTUyBFU046NEMx
+# T3BlcmF0aW9ucyBMaW1pdGVkMScwJQYDVQQLEx5uU2hpZWxkIFRTUyBFU046NTcx
 # QS0wNUUwLUQ5NDcxJTAjBgNVBAMTHE1pY3Jvc29mdCBUaW1lLVN0YW1wIFNlcnZp
-# Y2UwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDJ6JXSkHtuDz+pz+aS
-# IN0lefMlY9iCT2ZMZ4jenNCmzKtElERZwpgd3/11v6DfPh1ThUKQBkReq+TE/lA1
-# O0Ebkil7GmmHg+FuIkrC9f5RLgqRIWF/XB+UMBjW270JCqGHF8cVXu+G2aocsIKY
-# PGFk+YIGH39d8UlAhTBVlHxG1SSDOY31uZaJiB9fRH5sMCedxR22nXGMaYKl0EzK
-# CT8rSHdtRNTNAdviQ9/bKWQo+hYVifYY1iBbDw8YFQ7S9MwqNgPqkt4E/SFkOHk/
-# d/jGEYubrH3zG4hCn9EWfMFuC2HJJcaX41PVxkCobISFPsvRJ1HupCW/mnAM16ts
-# rdhIQMqTewOH1LrSEsk2o/vWIcqQbXvkcDKDrOYTmnd842v398gSk8CULxiKzFdo
-# ZfhGkMFhUqkaPQUJnCKyJmzGbRf3DplKTw45d/wnFNhYip9G5bN1SKvRneOI461o
-# Ortd3KkHiBmuGv3Qpw9MNHC/LrTOtBxr/UPUns9AkAk5tuJpuiLXa6xXxrG2VP90
-# J48Lid1wVxqvW/5+cKWGz27cWfouQcNFl83OFeAsMTBvp0DjLezob6BDfmj3SPaL
-# pqZprwmxX9wIX6INIbMDFljWxDWat0ybPF9bNc3qw8kzLj212xZMiBlZU5JL25Qe
-# FJiRuAzGct6Ipd4HkwH1Axw5JwIDAQABo4IBSTCCAUUwHQYDVR0OBBYEFMP6leT+
-# tP93sT/RATuEfTDP7pRhMB8GA1UdIwQYMBaAFJ+nFV0AXmJdg/Tl0mWnG1M1Gely
+# Y2UwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQCowlZB5YCrgvC9KNiy
+# M/RS+G+bSPRoA4mIwuDSwt/EqhNcB0oPqgy6rmsXmgSI7FX72jHQf3lDx+GhmrfH
+# 2XGC5nJM4riXbG1yC0kK2NdGWUzZtOmM6DflFSsHLRwCWgFT0YkGzssE2txsfqsG
+# I6+oNA2Jw9FnCrXrHKMyJ1TUnUAm5q33Iufu1qJ+gPnxuVgRwG+SPl0fWVr3NTzj
+# pAN46hE7o1yocuwPHz/NUpnE/fSZbpjtEyyq0HxwYKAbBVW6s6do0tezfWpNFPJU
+# dfymk52hKKEJd6p5uAkJHMbzMb97+TShoGMUUaX7y4UQvALKHjAr1nn5rNPN9rYY
+# PinqKG2yRezeWdbTlQp8MmEAAO3q+I5zRGT9zzM6KrOHSUql/95ZRjaj+G9wM9k2
+# Atoe/J8OpvwBZoq87fqJFlJeqFLDxLEmjRMKmxsKOa3HQukeeptvVQXtyrT2QJx9
+# ZMM9w3XaltgupyTRsgh88ptzseeuQ1CSz+ZJtVlOcPJPc7zMX2rgMJ9Z6xKvVqTJ
+# wN24bEJ0oG+C0mHVjEOrWyRPB5jHmIBZecHsozKWzdZBltO5tMIsu3xefy36yVwq
+# bkOS+hu5uYdKuK5MDfBPIjLgXFqZMqbRUO72ZZ2zwy2NRIlXA1VWUFdpDdkxxWOK
+# PJWhQ1W4Fj0xzBhwhArrbBDbQQIDAQABo4IBSTCCAUUwHQYDVR0OBBYEFEdVIZhQ
+# 1DdHA6XvXMgC5SMgqDUqMB8GA1UdIwQYMBaAFJ+nFV0AXmJdg/Tl0mWnG1M1Gely
 # MF8GA1UdHwRYMFYwVKBSoFCGTmh0dHA6Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lv
 # cHMvY3JsL01pY3Jvc29mdCUyMFRpbWUtU3RhbXAlMjBQQ0ElMjAyMDEwKDEpLmNy
 # bDBsBggrBgEFBQcBAQRgMF4wXAYIKwYBBQUHMAKGUGh0dHA6Ly93d3cubWljcm9z
 # b2Z0LmNvbS9wa2lvcHMvY2VydHMvTWljcm9zb2Z0JTIwVGltZS1TdGFtcCUyMFBD
 # QSUyMDIwMTAoMSkuY3J0MAwGA1UdEwEB/wQCMAAwFgYDVR0lAQH/BAwwCgYIKwYB
-# BQUHAwgwDgYDVR0PAQH/BAQDAgeAMA0GCSqGSIb3DQEBCwUAA4ICAQA5I03kykuL
-# K6ebzrp+tYiLSF1rMo0uBGndZk9+FiA8Lcr8M0zMuWJhBQCnpa2CiUitq2K9eM4b
-# WUiNrIb2vp7DgfWfldl0N8nXYMuOilqnl7WJT9iTR660/J86J699uwjNOT8bnX66
-# JQmTvvadXNq7qEjYobIYEk68BsBUVHSDymlnAuCFPjPeaQZmOr87hn89yZUa2Mam
-# zZMK0jitmM81bw7hz/holGZhD811b3UlGs5dGnJetMpQ97eQ3w3nqOmX2Si0uF29
-# 3z1Fs6wk1/ZfOpsBXteNXhxoKCUDZu3MPFzJ9/BeEu70cxTd0thMAj3WBM1QXsED
-# 2rUS9KUIoqU3w3XRjiJTSfIiR+lHFjIBtHKrlA9g8kcYDRPLQ8PzdoK3v1FrQh0M
-# gxK7BeWlSfIjLHCsPKWB84bLKxYHBD+Ozbj1upA5g92nI52BF7y1d0auAOgF65U4
-# r5xEKVemKY1jCvrWhnb+Q8zNWvNFRgyQFd71ap1J7OHy3K266VhhxEr3mqKEXSKt
-# Czr9Y5AmW1Bfv2XMVcT0UWWf0yLHRqz4Lgc/N35LRsE3cDddFE7AC/TXogK5PyFj
-# UifJbuPBWY346RDXN6LroutTlG0DPSdPHHk54/KOdNoi1NJjg4a4ZTVJdofj0lI/
-# e3zIZgD++ittbhWd54PvbUWDBolOgcWQ4jCCB3EwggVZoAMCAQICEzMAAAAVxedr
+# BQUHAwgwDgYDVR0PAQH/BAQDAgeAMA0GCSqGSIb3DQEBCwUAA4ICAQDDOggo5jZ2
+# dSN9a4yIajP+i+hzV7zpXBZpk0V2BGY6hC5F7ict21k421Mc2TdKPeeTIGzPPFJt
+# kRDQN27Ioccjk/xXzuMW20aeVHTA8/bYUB5tu8Bu62QwxVAwXOFUFaJYPRUCe73H
+# R+OJ8soMBVcvCi6fmsIWrBtqxcVzsf/QM+IL4MGfe1TF5+9zFQLKzj4MLezwJint
+# ZZelnxZv+90GEOWIeYHulZyawHze5zj8/YaYAjccyQ4S7t8JpJihCGi5Y6vTuX8o
+# zhOd3KUiKubx/ZbBdBwUTOZS8hIzqW51TAaVU19NMlSrZtMMR3e2UMq1X0BRjeuu
+# cXAdPAmvIu1PggWG+AF80PeYvV55JqQp/vFMgjgnK3XlJeEd3mgj9caNKDKSAmtY
+# DnusacALuu7f9lsU0Iwr8mPpfxfgvqYE5hrY0YrAfgDftgYOt5wn+pddZRi98tio
+# cZ/xOFiXXZiDWvBIqlYuiUD8HV6oHDhNFy9VjQi802Lmyb7/8cn0DDo0m5H+4NHt
+# fu8NeJylcyVE2AUzIANvwAUi9A90epxGlGitj5hQaW/N4nH/aA1jJ7MCiRusWEAK
+# wnYF/J4vIISjoC7AQefnXU8oTx0rgm+WYtKgePtUVHc0cOTfNGTHQTGSYXxo52m+
+# gqG7AELGhn8mFvNLOu9nvgZWMoojK3kUDTCCB3EwggVZoAMCAQICEzMAAAAVxedr
 # ngKbSZkAAAAAABUwDQYJKoZIhvcNAQELBQAwgYgxCzAJBgNVBAYTAlVTMRMwEQYD
 # VQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNy
 # b3NvZnQgQ29ycG9yYXRpb24xMjAwBgNVBAMTKU1pY3Jvc29mdCBSb290IENlcnRp
@@ -1319,44 +1350,44 @@ switch($Operation) {
 # tVdUCbFpAUR+fKFhbHP+CrvsQWY9af3LwUFJfn6Tvsv4O+S3Fb+0zj6lMVGEvL8C
 # wYKiexcdFYmNcP7ntdAoGokLjzbaukz5m/8K6TT4JDVnK+ANuOaMmdbhIurwJ0I9
 # JZTmdHRbatGePu1+oDEzfbzL6Xu/OHBE0ZDxyKs6ijoIYn/ZcGNTTY3ugm2lBRDB
-# cQZqELQdVTNYs6FwZvKhggNWMIICPgIBATCCAQGhgdmkgdYwgdMxCzAJBgNVBAYT
+# cQZqELQdVTNYs6FwZvKhggNZMIICQQIBATCCAQGhgdmkgdYwgdMxCzAJBgNVBAYT
 # AlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xLTArBgNVBAsTJE1pY3Jvc29mdCBJ
 # cmVsYW5kIE9wZXJhdGlvbnMgTGltaXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1Mg
-# RVNOOjRDMUEtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFt
-# cCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQCpE4xsxLwlxSVyc+TBEsVE9cWymaCB
+# RVNOOjU3MUEtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFt
+# cCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQAEcefs0Ia6xnPZF9VvK7BjA/KQFaCB
 # gzCBgKR+MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYD
 # VQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xJjAk
 # BgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMA0GCSqGSIb3DQEB
-# CwUAAgUA6uWJ5jAiGA8yMDI0MTExODA5Mzk1MFoYDzIwMjQxMTE5MDkzOTUwWjB0
-# MDoGCisGAQQBhFkKBAExLDAqMAoCBQDq5YnmAgEAMAcCAQACAhZxMAcCAQACAhOf
-# MAoCBQDq5ttmAgEAMDYGCisGAQQBhFkKBAIxKDAmMAwGCisGAQQBhFkKAwKgCjAI
-# AgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcNAQELBQADggEBAGm/ZJaRaJXh
-# IRTIHwSw2D/wm6sxLDY/XVIZg0gNZRdqX94SlZrQQybdaNJ0I+RStbUV/uSl8pU+
-# QVvFW3qhcZu0mcPq4zXgQRDj4zolfvGylGbTcslXohWVoUVVddS4Ww+7XONU8EcO
-# wJzV9KH3CmeYalWTnltY708OKx4ijSf5GGcGazZKbGFK1ePK2xXtD/GcrZGHJ0/s
-# rSQOCNu+PQFCZBEj2QgsoBou7jzHQIQ24cU+FH7uKRJFi+jlGrAo5wV8Qez8/CZ9
-# mTyNJYcD6qI1F2j8m5WA1P/Z4JmEMBIXaDbEJ3KIpKOZon/wh+RqUW9011WTV69A
-# wiYz/PXGZsExggQNMIIECQIBATCBkzB8MQswCQYDVQQGEwJVUzETMBEGA1UECBMK
-# V2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0
-# IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGltZS1TdGFtcCBQQ0Eg
-# MjAxMAITMwAAAf8SOHz3wWXWoQABAAAB/zANBglghkgBZQMEAgEFAKCCAUowGgYJ
-# KoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCCx1InLZYFh
-# 7EG8GJpnlJ0L3xbE5BJHyq9lPQMEbF/y1jCB+gYLKoZIhvcNAQkQAi8xgeowgecw
-# geQwgb0EIOQy777JAndprJwi4xPq8Dsk24xpU4jeoONIRXy6nKf9MIGYMIGApH4w
-# fDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1Jl
-# ZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQGA1UEAxMd
-# TWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAH/Ejh898Fl1qEAAQAA
-# Af8wIgQg5SoPijy40n7ERBUOuEELG/t00qXFXPCDK2xjd09HqPMwDQYJKoZIhvcN
-# AQELBQAEggIAT4sf3Thj8WR1HYuaWVexOxnda/j8xFBow8SajDKesQLvhxzJQSyg
-# +MnXJO1CiiI4kEZblDVy2/dqgn0EK4drp25WJMNebn+6A7EOMA1jeR8W98KzfLe9
-# cS+bBmQpPrnvCMLltJ8cjr6hkXWN/L3vfBgrZ01rvI3IUeokSJRJc9Bcuv7ZefSm
-# HdYwJnQjs1QKY86vnAlvdO+GM4Spu6hwNhOiX3ei1xH2IJJNzoJWA8bBr5VB2PYd
-# lmNHT1G4z+7bPe72NgrYbtzIsoJbkH0Cwga27UWzA0S+06KSqWVEHobsOqHubBha
-# jKRvElCDh4P71UniI2eJYDc16lCofX6mccaFJxqfsieRHZYviZV/0Hi4OrYnaAs5
-# Z7SEgM+hkZB76Q/cL5iUo36FT5gY05Lhhu4IXvw2i3hgErFX/6VfDFZJu9n9fNH6
-# R1tVhhtHxhQy+KsjwnV7YnYqtwBF0+hL5Uouqk8EFzHTk8U3Lg1LNBpfR7AZ9zoq
-# DoDGxSlutf+2ZTQC7OycWriE02ClutppEAed4kC0diC8UfaXN9k719p+UmbdU1eJ
-# eAgme685sUgtXO/6VXG/F6WJt2Ptf4KjVWNJChfUFleAhxkTuxK9dhYKOcb8Edeo
-# 5/sV6RANHFxMKg35ETbHazmTMGS+7F7yzitu/fwfvFdtLCUS6bJFQZo=
+# CwUAAgUA6umNLDAiGA8yMDI0MTEyMTEwNDI1MloYDzIwMjQxMTIyMTA0MjUyWjB3
+# MD0GCisGAQQBhFkKBAExLzAtMAoCBQDq6Y0sAgEAMAoCAQACAiWYAgH/MAcCAQAC
+# AhMhMAoCBQDq6t6sAgEAMDYGCisGAQQBhFkKBAIxKDAmMAwGCisGAQQBhFkKAwKg
+# CjAIAgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcNAQELBQADggEBAIHJFghi
+# 2T20170Ru8IcP6I2SmqV6+r1nYt6Q1xHUfzQFOvuB7rgvB+92tx960z03cBHy4n9
+# XajwIcDi/Z4gge0AJXAClI0Ofa+alGkU6GhxmrhFv81C3NSRLkjGWfknA+P+hFlC
+# 3yjrOycaGa1AZpMZwGPYxGZrKvWglUVoYnv3LGU5X1bcz8XIDLuqh2hMO6izXw21
+# zlaKJ01YZWIa0DOk+guvuzj1dS0mjggmQTO+o6zcLOrfO89UxKM7ufV77iC68AVx
+# MEhdBEawuvlwh34bo29HsCB5dl2SIMp6iu2q90O331WtjfQcOHCZeT5StkqP9iWE
+# JzouML/arQpZ/6YxggQNMIIECQIBATCBkzB8MQswCQYDVQQGEwJVUzETMBEGA1UE
+# CBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9z
+# b2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGltZS1TdGFtcCBQ
+# Q0EgMjAxMAITMwAAAfvLy2w3Z+UwlQABAAAB+zANBglghkgBZQMEAgEFAKCCAUow
+# GgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCDzWX6V
+# UpJ2rZMft8GqPy+HCFoXzpZhBuhcdKpcTpzVjTCB+gYLKoZIhvcNAQkQAi8xgeow
+# gecwgeQwgb0EIDnbAqv8oIWVU1iJawIuwHiqGMRgQ/fEepioO7VJJOUYMIGYMIGA
+# pH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcT
+# B1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQGA1UE
+# AxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAH7y8tsN2flMJUA
+# AQAAAfswIgQgD3ECQfGcI49pCT7igvNeOth+gBiYC+HutIS9QMcFjXwwDQYJKoZI
+# hvcNAQELBQAEggIATSDbMRWvAAwXWNKKJklnVhqNk+nTkGa+r/cfGljQN8PFCWvu
+# mODEY9YLmKtkQKjsXo0XHbtsmy2IV8L00eCNKqqpitXaM9gVYqLN2KzeVmlLfD0S
+# m+FOH4xSsLerLRHZi4aGqOBgx2MvxUemoR1z8pTnyVtAyrqdLMjtTPt7a8FijG6F
+# IxzFEJO10diC6OBoWnKVOts+d99hp8D2VHQ2lVA7fOckC4Ax8t5oTulrss9Cpkuo
+# UdDVf2yo1+QHW0FV3O3y6IJGXOHCHv5cThKk70RwLeGlxADEEctavQBo7sV3dnUN
+# 5oyRIBC2fhOMGLlubKJRkMye17hVt4KuewAqoBGqfMAqUOVT9GihWCgD0x0Wn8tS
+# oVYPA6oh3R4G4iHdwrJFPHvIs6PYOi3gMXHdx+s0Upcou1KTAHvDcudcOdDucbI6
+# AkackaU8P6DCR8smSspLxQkdX0Q6YKR9WI13vJonYHWcb/W+hu98rsXy1S3cYJeb
+# OgCBqLJCx847EEfSDleaKF16yZFd4zH9KY9WAhdGpjFW9ft0HCiZ2phWDHlH7n88
+# se+tV5IVMHiNhys415L2fVc4OkjvJRrYf2YNL8h37PkiPy0UwbW8brkZ+j8PtkJ5
+# Hg7EBUPAbj7o2kN5kBaovnU/HwQoMPqb64iB5dFwKD7gBg9k/QXMOBYQefI=
 # SIG # End signature block
