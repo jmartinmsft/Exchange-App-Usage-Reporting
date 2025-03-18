@@ -22,12 +22,9 @@
     SOFTWARE
 #>
 
-# Version 202502028.1057
+# Version 20250306.1518
 [CmdletBinding(DefaultParameterSetName = '__AllParameterSets')]
 param (
-    [Parameter(ParameterSetName="AuditQuery",Mandatory=$true,HelpMessage="The Name parameter specifies the name for the query and value to be appended to the output file.")]
-    [string]$Name,
-
     [ValidateScript({ Test-Path $_ })]
     [Parameter(Mandatory = $true, HelpMessage="The OutputPath parameter specifies the path for the EWS usage report.")]
     [string] $OutputPath,
@@ -59,20 +56,21 @@ param (
 
     [Parameter(Mandatory=$false)] [object]$Scope= @("AuditLogsQuery.Read.All"),
     
-    [Parameter(ParameterSetName="AuditQuery",Mandatory=$False,HelpMessage="The AuditQueryId parameter specifies the query ID.")]
-    [string]$AuditQueryId,
+    [Parameter(ParameterSetName="AppUsage",Mandatory=$False,HelpMessage="The AppId parameter specifies the application ID.")]
+    [string]$AppId,
 
-    [Parameter(Mandatory=$true,HelpMessage="The Operation parameter specifies the operation the script should perform.")] [ValidateSet("NewAuditQuery", "CheckAuditQuery","GetQueryResults","ListQueries","GetApplicationName","GetSignInActivity")]
+    [Parameter(Mandatory=$true,HelpMessage="The Operation parameter specifies the operation the script should perform.")] [ValidateSet("GetEwsActivity","GetAppUsage")]
     [string]$Operation = $null,
 
-    [Parameter(ParameterSetName="AuditQuery",Mandatory=$true,HelpMessage="The SearchType parameter specifies the what type of EWS query to perform.")] [ValidateSet("EwsUsage","MacOutlook")]
-    [string]$SearchType = "EwsUsage",
-
-    [Parameter(ParameterSetName="AuditQuery",Mandatory=$False,HelpMessage="The StartDate parameter specifies start date for the audit log query.")]
+    [Parameter(ParameterSetName="AppUsage",Mandatory=$False,HelpMessage="The StartDate parameter specifies start date for the audit log query.")]
     [datetime]$StartDate=(Get-Date).AddDays(-7),
 
-    [Parameter(ParameterSetName="AuditQuery",Mandatory=$False,HelpMessage="The EndDate parameter specifies the end date for the audit log query.")]
-    [datetime]$EndDate=(Get-Date)
+    [Parameter(ParameterSetName="AppUsage",Mandatory=$False,HelpMessage="The EndDate parameter specifies the end date for the audit log query.")]
+    [datetime]$EndDate=(Get-Date),
+
+    [Parameter(ParameterSetName="AppUsage",Mandatory=$False,HelpMessage="The Interval parameter specifies the number of hours for sign-in log query.")]
+    [ValidateRange(1, 24)]
+    [int]$Interval=1
 )
 
 function Get-CloudServiceEndpoint {
@@ -1016,27 +1014,6 @@ function getFileName{
     return $CSVfilename
 }
 
-function CreateAuditQuery{
-    param(
-        [Parameter(Mandatory=$false)]
-        [string]$Admin
-    )
-    try{
-        Write-Host "Attempting to create a new audit query..." -ForegroundColor Cyan -NoNewline
-        $Body = $Body | ConvertTo-JSON -Depth 6
-        $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries" -AccessToken $Script:Token -Method POST -Body $Body -Endpoint beta # | Out-Null
-        [string]$auditQuery = ($q.Response.Content | ConvertFrom-Json).id
-        Write-Host "OK" -ForegroundColor Green
-        $CSVfilename = getFileName -OutputPath $outputPath
-        @{auditQueryId=$auditQuery} | Export-Csv $CSVfilename -NoTypeInformation
-    }
-    catch {
-        Write-Host "FAILED" -ForegroundColor Red
-        Write-Host "Failed to create the audit query." -ForegroundColor Red
-    }
-    Write-Host "New audit log query created with the id: $($auditQuery)"
-}
-
 function GetAzureAdApplications{
     Write-Host "Getting a list of Entra App registrations..." -ForegroundColor Green
     $Script:AadApplications = New-Object System.Collections.ArrayList
@@ -1122,7 +1099,7 @@ function GetAppsByApi {
             }
         }
     }
-    $Script:ApiPermissions | Export-Csv "$OutputPath\$Api-EntraAppRegistrations-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
+    $Script:ApiPermissions | Export-Csv "$OutputPath\EWS-EntraAppRegistrations-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
 }
 
 #Define variables
@@ -1135,13 +1112,78 @@ $Script:applicationInfo = @{
 }
 $APIResource = $cloudService.GraphApiEndpoint
 
-if($Operation){
-    $Scope= @("Application.Read.All")
-}
-Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
+#if($Operation -eq "GetEwsActivity") {
+#    $Scope= @("Application.Read.All")
+#}
+
+#Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
 
 switch($Operation) {
-    "GetSignInActivity"{
+    "GetAppUsage"{
+        $Scope= @("AuditLog.Read.All")
+        Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
+        Write-Host "Searching audit logs for the application $($AppId)..." -ForegroundColor Green
+        $OutputFile = "$OutputPath\$($AppId)-SignInEvents-$((Get-Date).ToString("yyyyMMddhhmmss")).csv"
+        
+        # Breaking down the sign-in logs requests to hour intervals
+        $StartTime = $StartDate
+        while ($StartTime -lt $EndDate) {
+            $EndTime = $StartTime.AddHours($Interval)
+            if ($EndTime -gt $EndDate) {
+                $EndTime = $EndDate
+            }
+            $EndTime = $EndTime.ToUniversalTime()
+            $StartTime = $StartTime.ToUniversalTime()
+            $EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
+            $StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
+        
+            # Set the filter for the sign-in log query
+            Write-Progress -Activity "Getting sign-in activity for $($Appid)" -CurrentOperation "Searching between $($StartSearch) and $($EndSearch)"
+            $Query = "auditLogs/signIns?`$filter=createdDateTime ge $StartSearch and createdDateTime le $EndSearch and appId eq '$($AppId)' and (signInEventTypes/any(t:t eq 'interactiveUser') or signInEventTypes/any(t:t eq 'nonInteractiveUser') or signInEventTypes/any(t:t eq 'servicePrincipal'))"
+            $Script:SignInEvents = New-Object System.Collections.ArrayList
+            $results = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $APIResource -Endpoint beta
+            foreach($r in $results.Content.Value){
+                New-Object -TypeName PSCustomObject -Property @{
+                    CreatedDateTime = $r.createdDateTime
+                    UserPrincipalName = $r.userPrincipalName
+                    AppId = $r.appId
+                    AppDisplayName = $r.appDisplayName
+                    IsInteractive = $r.isInteractive
+                    ClientCredentialType = $r.clientCredentialType
+                    SignInEventTypes = $r.signInEventTypes -join ","
+                } | Export-Csv -Path $OutputFile -NoTypeInformation -Append
+            }
+            
+            # Check if response includes more results link
+            while($null -ne $results.Content.'@odata.nextLink') {
+                $Query = $results.Content.'@odata.nextLink'.Substring($results.Content.'@odata.nextLink'.IndexOf("auditLog"))
+                $results = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $APIResource -Endpoint beta
+                foreach($r in $results.Content.Value) {
+                    New-Object -TypeName PSCustomObject -Property @{
+                        CreatedDateTime = $r.createdDateTime
+                        UserPrincipalName = $r.userPrincipalName
+                        AppId = $r.appId
+                        AppDisplayName = $r.appDisplayName
+                        IsInteractive = $r.isInteractive
+                        ClientCredentialType = $r.clientCredentialType
+                        SignInEventTypes = $r.signInEventTypes -join ","
+                    } | Export-Csv -Path $OutputFile -NoTypeInformation -Append
+                }
+            }
+
+            # Move to the next hour
+            $StartTime = $EndTime
+        }
+
+        # Display the results in a grid view
+        if(Test-Path $OutputFile) {
+            Import-Csv $OutputFile | Group-Object -Property userPrincipalName,signInEventTypes,appDisplayName | Select-Object Count,@{n='UPN';e={$_.Group[0].userPrincipalName}},@{n='AppId';e={$_.Group[0].AppId}},@{n='signInEventType';e={$_.Group[0].signInEventTypes}},@{n='appDisplayName';e={$_.Group[0].appDisplayName}} | Sort-Object Count -Descending | Out-GridView -Title "EWS Application Results"
+        }
+    }
+    "GetEwsActivity"{
+        $Scope= @("Application.Read.All")
+        Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
+
         # Call function to obtain list of app registrations from Entra
         GetAzureADApplications
 
@@ -1150,8 +1192,10 @@ switch($Operation) {
 
         # Call function to Filter app registrations using the selected API
         GetAppsByApi
+
         Write-Host "The following applications have permissions to access the EWS API: `n" -ForegroundColor Green
-        $Script:ApiPermissions | Sort-Object -Property ApplicationDisplayName | Format-Table -AutoSize
+        #$Script:ApiPermissions | Sort-Object -Property ApplicationDisplayName | Format-Table -AutoSize
+        #$Script:ApiPermissions.Add(@{ApplicationId="d3590ed6-52b3-4102-aeff-aad2292ab01c";ApplicationDisplayName="Microsoft Office"}) | Out-Null
         $Apps = $Script:ApiPermissions | Sort-Object -Property ApplicationId -Unique | Select-Object ApplicationId,ApplicationDisplayName
         $AppActivity = New-Object System.Collections.ArrayList
         Write-Host "Checking the sign-in activity for the applications..." -ForegroundColor Green
@@ -1160,9 +1204,22 @@ switch($Operation) {
         $CurrentProgress = $ProgressPreference
         $CurrentView = $PSStyle.Progress.View
         $ProgressPreference = "Continue"
-        $PSStyle.Progress.View = "Classic"
+        #$PSStyle.Progress.View = "Classic"
+        $OutputFile = "$OutputPath\App-SignInActivity-$((Get-Date).ToString("yyyyMMddhhmmss")).csv"
+        Write-Host "Starting query at $(Get-Date)" -ForegroundColor Cyan
         foreach($App in $Apps){
             Write-Progress -Activity "Getting sign-in activity for service principals" -CurrentOperation "Processing $($App.ApplicationDisplayName)" -PercentComplete (($x / $TotalApps) * 100)
+            <#
+            $Query = "auditLogs/signIns?`$top=1&`$filter=(signInEventTypes/any(t:t eq 'interactiveUser') or signInEventTypes/any(t:t eq 'nonInteractiveUser') or signInEventTypes/any(t:t eq 'servicePrincipal')) and appId eq '$($App.ApplicationId)'"
+            $Script:SignInEvents = New-Object System.Collections.ArrayList
+            $results = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $APIResource -Endpoint beta
+                New-Object -TypeName PSCustomObject -Property @{
+                    CreatedDateTime = $r.content.value.createdDateTime
+                    AppId = $r.content.value.appId
+                    AppDisplayName = $r.content.value.appDisplayName
+                } | Export-Csv -Path $OutputFile -NoTypeInformation -Append
+            
+            #>
             $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "reports/servicePrincipalSignInActivities?`$filter=appId eq '$($App.ApplicationId)'" -AccessToken $Script:Token -Endpoint beta
             if([string]::IsNullOrEmpty($q.Content.value.appId)){
                 $SpActivity = [PSCustomObject]@{
@@ -1182,314 +1239,12 @@ switch($Operation) {
             $x++
         }
         Write-Host "The following applications have sign-in activity: `n" -ForegroundColor Green
-        $AppActivity | Sort-Object -Property Application
+        #Import-Csv -Path $OutputPath
+        $AppActivity | Sort-Object -Property LastSignIn | Format-Table -AutoSize
+        $AppActivity | Export-Csv -Path $OutputFile -NoTypeInformation
         $ProgressPreference = $CurrentProgress
-        $PSStyle.Progress.View = $CurrentView
+        #$PSStyle.Progress.View = $CurrentView
+        Write-Host "Query completed at $(Get-Date)" -ForegroundColor Cyan
         exit
-    }
-    "NewAuditQuery" {
-        $Hour = (New-TimeSpan -Minutes 60).Ticks
-        $EndTime = (Get-Date -Date $EndDate).ToUniversalTime()
-        $Ticks = ([Math]::Round($EndTime.Ticks / $Hour, 0) * $Hour) -as [long]
-        $EndTime = [datetime]$Ticks
-        $StartTime = (Get-Date -Date $StartDate).ToUniversalTime()
-        $Ticks = ([Math]::Round($StartTime.Ticks / $Hour, 0) * $Hour) -as [long]
-        $StartTime = [datetime]$Ticks
-        $EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
-        $StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
-        $Body = @{
-            "@odata.type" = "#microsoft.graph.security.auditLogQuery"
-            filterStartDateTime = $StartSearch
-            filterEndDateTime = $EndSearch
-            displayName = "Audit-query-$($Name)"
-            recordTypeFilters = @("exchangeItem","exchangeAggregatedOperation","exchangeItemAggregated","exchangeItemGroup")
-        }
-        switch($SearchType) {
-            "EwsUsage" {
-                $Body.Add("keywordFilter","Client=WebServices")
-            }
-            "MacOutlook"{
-                $Body.Add("keywordFilter","Client=WebServices;MacOutlook")
-            }
-        }
-        CreateAuditQuery
-        exit
-    }
-    "CheckAuditQuery" {
-        Write-Host "Checking the audit query status for $($AuditQueryId)..." -ForegroundColor Cyan -NoNewline
-        $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries/$($AuditQueryId)" -AccessToken $Script:Token -Method GET -Endpoint beta
-        Write-Host $q.content.status
-        exit
-    }
-    "GetQueryResults" {
-        Write-Host "Checking the audit query status for $($AuditQueryId)..." -ForegroundColor Cyan -NoNewline
-        $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries/$($AuditQueryId)" -AccessToken $Script:Token -Method GET -Endpoint beta
-        if($q.Content.status -eq "succeeded"){
-            Write-Host $q.content.status -ForegroundColor Green
-            $CSVfilename = getFileName $outputPath
-            Write-Host "Attempting to get the audit log records for EWS impersonation." -ForegroundColor Cyan -NoNewline
-            # Retrieve 1000 records per request instead of the default 150
-            $r = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries/$($AuditQueryId)/records?`$top=1000" -AccessToken $Script:Token -Method GET -Endpoint beta
-            # Filter the records for impersonation
-            $r.Content.value | Select-Object -ExpandProperty AuditData | Select-Object -ExcludeProperty "@odata.type" | Export-Csv $CSVfilename -NoTypeInformation
-            while($null -ne $r.Content.'@odata.nextLink'){
-                $Query = $r.Content.'@odata.nextLink'.Substring($r.Content.'@odata.nextLink'.IndexOf("security"))
-                $r = Invoke-GraphApiRequest -GraphApiUrl $cloudService.graphApiEndpoint -AccessToken $Script:Token -Query $Query -Endpoint beta
-                $r.Content.value | Select-Object -ExpandProperty AuditData | Select-Object -ExcludeProperty "@odata.type" | Export-Csv $CSVfilename -NoTypeInformation
-                Write-Host "." -NoNewline
-            }
-            switch($SearchType) {
-                "EwsUsage" {
-                    Import-Csv $CSVfilename | Group-Object -Property AppId,ClientInfoString | Select-Object Count,@{n='AppId';e={$_.Group[0].AppId}},@{n='ClientInfoString';e={$_.Group[0].ClientInfoString}} | Out-GridView -Title "EWS Application Results"
-                }
-                "MacOutlook" {
-                    Import-Csv $CSVfilename | Group-Object -Property UserId,ClientInfoString | Select-Object Count,@{n='UserId';e={$_.Group[0].UserId}},@{n='ClientInfoString';e={$_.Group[0].ClientInfoString}} | Out-GridView -Title "Mac Outlook Application Results"
-                }
-            }
-        }
-        else {
-            Write-Host "Audit query did not complete successfully. Check query status for more information." -ForegroundColor Yellow
-        }
-    }
-    "ListQueries" {
-        [string]$Query = "security/auditLog/queries"
-        $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query $Query -AccessToken $Script:Token -Method GET -Endpoint beta
-        $q.content.value
-    }
-    "GetApplicationName" {
-        # Filter the app IDs for unique values
-        $CSVfilename = getFileName $outputPath
-        while(-not(Test-Path $CSVfilename)){
-            $CSVfilename = Read-Host "Enter the full path to the Ews-Impersonation-Results.csv "
-            if(-not($CSVfilename.EndsWith("Ews-Impersonation-Results.csv"))) {
-                $CSVfilename = "$($CSVfilename)\Ews-Impersonation-Results.csv"
-            }
-        }
-        $Applications = (Import-Csv $CSVfilename).AppId | Sort-Object -Unique
-        # Retrieve the application name for each app Id
-        Write-Host "Getting the application name for each AppId." -ForegroundColor Cyan
-        foreach($app in $Applications) {
-            [string]$Query = "applications(appId='$($app)')"
-            $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query $Query -AccessToken $Script:Token -Method GET -Endpoint v1.0
-            Write-Host "$($app): $($q.content.displayName)"
-        }
     }
 }
-
-# SIG # Begin signature block
-# MIIoRQYJKoZIhvcNAQcCoIIoNjCCKDICAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCZoQmUxRqh/Bdb
-# jdePUGEF8l9vOXUGGzrpLbDrpC+CiqCCDXYwggX0MIID3KADAgECAhMzAAAEBGx0
-# Bv9XKydyAAAAAAQEMA0GCSqGSIb3DQEBCwUAMH4xCzAJBgNVBAYTAlVTMRMwEQYD
-# VQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNy
-# b3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBDb2RlIFNpZ25p
-# bmcgUENBIDIwMTEwHhcNMjQwOTEyMjAxMTE0WhcNMjUwOTExMjAxMTE0WjB0MQsw
-# CQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9u
-# ZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMR4wHAYDVQQDExVNaWNy
-# b3NvZnQgQ29ycG9yYXRpb24wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIB
-# AQC0KDfaY50MDqsEGdlIzDHBd6CqIMRQWW9Af1LHDDTuFjfDsvna0nEuDSYJmNyz
-# NB10jpbg0lhvkT1AzfX2TLITSXwS8D+mBzGCWMM/wTpciWBV/pbjSazbzoKvRrNo
-# DV/u9omOM2Eawyo5JJJdNkM2d8qzkQ0bRuRd4HarmGunSouyb9NY7egWN5E5lUc3
-# a2AROzAdHdYpObpCOdeAY2P5XqtJkk79aROpzw16wCjdSn8qMzCBzR7rvH2WVkvF
-# HLIxZQET1yhPb6lRmpgBQNnzidHV2Ocxjc8wNiIDzgbDkmlx54QPfw7RwQi8p1fy
-# 4byhBrTjv568x8NGv3gwb0RbAgMBAAGjggFzMIIBbzAfBgNVHSUEGDAWBgorBgEE
-# AYI3TAgBBggrBgEFBQcDAzAdBgNVHQ4EFgQU8huhNbETDU+ZWllL4DNMPCijEU4w
-# RQYDVR0RBD4wPKQ6MDgxHjAcBgNVBAsTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEW
-# MBQGA1UEBRMNMjMwMDEyKzUwMjkyMzAfBgNVHSMEGDAWgBRIbmTlUAXTgqoXNzci
-# tW2oynUClTBUBgNVHR8ETTBLMEmgR6BFhkNodHRwOi8vd3d3Lm1pY3Jvc29mdC5j
-# b20vcGtpb3BzL2NybC9NaWNDb2RTaWdQQ0EyMDExXzIwMTEtMDctMDguY3JsMGEG
-# CCsGAQUFBwEBBFUwUzBRBggrBgEFBQcwAoZFaHR0cDovL3d3dy5taWNyb3NvZnQu
-# Y29tL3BraW9wcy9jZXJ0cy9NaWNDb2RTaWdQQ0EyMDExXzIwMTEtMDctMDguY3J0
-# MAwGA1UdEwEB/wQCMAAwDQYJKoZIhvcNAQELBQADggIBAIjmD9IpQVvfB1QehvpC
-# Ge7QeTQkKQ7j3bmDMjwSqFL4ri6ae9IFTdpywn5smmtSIyKYDn3/nHtaEn0X1NBj
-# L5oP0BjAy1sqxD+uy35B+V8wv5GrxhMDJP8l2QjLtH/UglSTIhLqyt8bUAqVfyfp
-# h4COMRvwwjTvChtCnUXXACuCXYHWalOoc0OU2oGN+mPJIJJxaNQc1sjBsMbGIWv3
-# cmgSHkCEmrMv7yaidpePt6V+yPMik+eXw3IfZ5eNOiNgL1rZzgSJfTnvUqiaEQ0X
-# dG1HbkDv9fv6CTq6m4Ty3IzLiwGSXYxRIXTxT4TYs5VxHy2uFjFXWVSL0J2ARTYL
-# E4Oyl1wXDF1PX4bxg1yDMfKPHcE1Ijic5lx1KdK1SkaEJdto4hd++05J9Bf9TAmi
-# u6EK6C9Oe5vRadroJCK26uCUI4zIjL/qG7mswW+qT0CW0gnR9JHkXCWNbo8ccMk1
-# sJatmRoSAifbgzaYbUz8+lv+IXy5GFuAmLnNbGjacB3IMGpa+lbFgih57/fIhamq
-# 5VhxgaEmn/UjWyr+cPiAFWuTVIpfsOjbEAww75wURNM1Imp9NJKye1O24EspEHmb
-# DmqCUcq7NqkOKIG4PVm3hDDED/WQpzJDkvu4FrIbvyTGVU01vKsg4UfcdiZ0fQ+/
-# V0hf8yrtq9CkB8iIuk5bBxuPMIIHejCCBWKgAwIBAgIKYQ6Q0gAAAAAAAzANBgkq
-# hkiG9w0BAQsFADCBiDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24x
-# EDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlv
-# bjEyMDAGA1UEAxMpTWljcm9zb2Z0IFJvb3QgQ2VydGlmaWNhdGUgQXV0aG9yaXR5
-# IDIwMTEwHhcNMTEwNzA4MjA1OTA5WhcNMjYwNzA4MjEwOTA5WjB+MQswCQYDVQQG
-# EwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwG
-# A1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSgwJgYDVQQDEx9NaWNyb3NvZnQg
-# Q29kZSBTaWduaW5nIFBDQSAyMDExMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIIC
-# CgKCAgEAq/D6chAcLq3YbqqCEE00uvK2WCGfQhsqa+laUKq4BjgaBEm6f8MMHt03
-# a8YS2AvwOMKZBrDIOdUBFDFC04kNeWSHfpRgJGyvnkmc6Whe0t+bU7IKLMOv2akr
-# rnoJr9eWWcpgGgXpZnboMlImEi/nqwhQz7NEt13YxC4Ddato88tt8zpcoRb0Rrrg
-# OGSsbmQ1eKagYw8t00CT+OPeBw3VXHmlSSnnDb6gE3e+lD3v++MrWhAfTVYoonpy
-# 4BI6t0le2O3tQ5GD2Xuye4Yb2T6xjF3oiU+EGvKhL1nkkDstrjNYxbc+/jLTswM9
-# sbKvkjh+0p2ALPVOVpEhNSXDOW5kf1O6nA+tGSOEy/S6A4aN91/w0FK/jJSHvMAh
-# dCVfGCi2zCcoOCWYOUo2z3yxkq4cI6epZuxhH2rhKEmdX4jiJV3TIUs+UsS1Vz8k
-# A/DRelsv1SPjcF0PUUZ3s/gA4bysAoJf28AVs70b1FVL5zmhD+kjSbwYuER8ReTB
-# w3J64HLnJN+/RpnF78IcV9uDjexNSTCnq47f7Fufr/zdsGbiwZeBe+3W7UvnSSmn
-# Eyimp31ngOaKYnhfsi+E11ecXL93KCjx7W3DKI8sj0A3T8HhhUSJxAlMxdSlQy90
-# lfdu+HggWCwTXWCVmj5PM4TasIgX3p5O9JawvEagbJjS4NaIjAsCAwEAAaOCAe0w
-# ggHpMBAGCSsGAQQBgjcVAQQDAgEAMB0GA1UdDgQWBBRIbmTlUAXTgqoXNzcitW2o
-# ynUClTAZBgkrBgEEAYI3FAIEDB4KAFMAdQBiAEMAQTALBgNVHQ8EBAMCAYYwDwYD
-# VR0TAQH/BAUwAwEB/zAfBgNVHSMEGDAWgBRyLToCMZBDuRQFTuHqp8cx0SOJNDBa
-# BgNVHR8EUzBRME+gTaBLhklodHRwOi8vY3JsLm1pY3Jvc29mdC5jb20vcGtpL2Ny
-# bC9wcm9kdWN0cy9NaWNSb29DZXJBdXQyMDExXzIwMTFfMDNfMjIuY3JsMF4GCCsG
-# AQUFBwEBBFIwUDBOBggrBgEFBQcwAoZCaHR0cDovL3d3dy5taWNyb3NvZnQuY29t
-# L3BraS9jZXJ0cy9NaWNSb29DZXJBdXQyMDExXzIwMTFfMDNfMjIuY3J0MIGfBgNV
-# HSAEgZcwgZQwgZEGCSsGAQQBgjcuAzCBgzA/BggrBgEFBQcCARYzaHR0cDovL3d3
-# dy5taWNyb3NvZnQuY29tL3BraW9wcy9kb2NzL3ByaW1hcnljcHMuaHRtMEAGCCsG
-# AQUFBwICMDQeMiAdAEwAZQBnAGEAbABfAHAAbwBsAGkAYwB5AF8AcwB0AGEAdABl
-# AG0AZQBuAHQALiAdMA0GCSqGSIb3DQEBCwUAA4ICAQBn8oalmOBUeRou09h0ZyKb
-# C5YR4WOSmUKWfdJ5DJDBZV8uLD74w3LRbYP+vj/oCso7v0epo/Np22O/IjWll11l
-# hJB9i0ZQVdgMknzSGksc8zxCi1LQsP1r4z4HLimb5j0bpdS1HXeUOeLpZMlEPXh6
-# I/MTfaaQdION9MsmAkYqwooQu6SpBQyb7Wj6aC6VoCo/KmtYSWMfCWluWpiW5IP0
-# wI/zRive/DvQvTXvbiWu5a8n7dDd8w6vmSiXmE0OPQvyCInWH8MyGOLwxS3OW560
-# STkKxgrCxq2u5bLZ2xWIUUVYODJxJxp/sfQn+N4sOiBpmLJZiWhub6e3dMNABQam
-# ASooPoI/E01mC8CzTfXhj38cbxV9Rad25UAqZaPDXVJihsMdYzaXht/a8/jyFqGa
-# J+HNpZfQ7l1jQeNbB5yHPgZ3BtEGsXUfFL5hYbXw3MYbBL7fQccOKO7eZS/sl/ah
-# XJbYANahRr1Z85elCUtIEJmAH9AAKcWxm6U/RXceNcbSoqKfenoi+kiVH6v7RyOA
-# 9Z74v2u3S5fi63V4GuzqN5l5GEv/1rMjaHXmr/r8i+sLgOppO6/8MO0ETI7f33Vt
-# Y5E90Z1WTk+/gFcioXgRMiF670EKsT/7qMykXcGhiJtXcVZOSEXAQsmbdlsKgEhr
-# /Xmfwb1tbWrJUnMTDXpQzTGCGiUwghohAgEBMIGVMH4xCzAJBgNVBAYTAlVTMRMw
-# EQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVN
-# aWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBDb2RlIFNp
-# Z25pbmcgUENBIDIwMTECEzMAAAQEbHQG/1crJ3IAAAAABAQwDQYJYIZIAWUDBAIB
-# BQCggbAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEO
-# MAwGCisGAQQBgjcCARUwLwYJKoZIhvcNAQkEMSIEIIELgD87d3nuZ9YWqfCgGy78
-# hyeTUgYyPdWvnlG7hII+MEQGCisGAQQBgjcCAQwxNjA0oBSAEgBNAGkAYwByAG8A
-# cwBvAGYAdKEcgBpodHRwczovL3d3dy5taWNyb3NvZnQuY29tIDANBgkqhkiG9w0B
-# AQEFAASCAQAuHRqmYi2jjDECzrKG7RF/4HlyVUDlmQFWUvnGsok1LnHJ8hWDRQUp
-# AX35Sda9FVI1AlHiVKEvy+4tc3iXn6kFDtoPlsvK8JNE/UZCAWPC5gv+XbW+aBzV
-# ulYuxiss/Dpcu9HZOW5skMw9tmcGr+4qG+AN/o6g5mfsuhR11+SjT/GHdGy5Yqt1
-# UyD8f+5WGn3TsciSMSPS2l/QYbefP3xPbiCbX4OZIcIongLJQEUt9+OMAuHp1XO6
-# 7xy17A4dGPp2PCIi8aIbZtyIrFSgjmoyFJKw03OMbm/Lsg5Hudq3GSVMu0YhISDM
-# 8M7a/NnkCxyzM4VWsiQ4kP6+6KwcrXrqoYIXrTCCF6kGCisGAQQBgjcDAwExgheZ
-# MIIXlQYJKoZIhvcNAQcCoIIXhjCCF4ICAQMxDzANBglghkgBZQMEAgEFADCCAVoG
-# CyqGSIb3DQEJEAEEoIIBSQSCAUUwggFBAgEBBgorBgEEAYRZCgMBMDEwDQYJYIZI
-# AWUDBAIBBQAEICI+nWZVKgANRXA7wCTyS6Wwoy5uYN2esAprQkUlTG0UAgZnv7Vw
-# KlIYEzIwMjUwMjI4MTYwNTA3Ljc2OVowBIACAfSggdmkgdYwgdMxCzAJBgNVBAYT
-# AlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYD
-# VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xLTArBgNVBAsTJE1pY3Jvc29mdCBJ
-# cmVsYW5kIE9wZXJhdGlvbnMgTGltaXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1Mg
-# RVNOOjU1MUEtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFt
-# cCBTZXJ2aWNloIIR+zCCBygwggUQoAMCAQICEzMAAAIB0UVZmBDMQk8AAQAAAgEw
-# DQYJKoZIhvcNAQELBQAwfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0
-# b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3Jh
-# dGlvbjEmMCQGA1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTAwHhcN
-# MjQwNzI1MTgzMTIyWhcNMjUxMDIyMTgzMTIyWjCB0zELMAkGA1UEBhMCVVMxEzAR
-# BgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1p
-# Y3Jvc29mdCBDb3Jwb3JhdGlvbjEtMCsGA1UECxMkTWljcm9zb2Z0IElyZWxhbmQg
-# T3BlcmF0aW9ucyBMaW1pdGVkMScwJQYDVQQLEx5uU2hpZWxkIFRTUyBFU046NTUx
-# QS0wNUUwLUQ5NDcxJTAjBgNVBAMTHE1pY3Jvc29mdCBUaW1lLVN0YW1wIFNlcnZp
-# Y2UwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQC1at/4fMO7uyTnTLlg
-# eF4IgkbS7FFIUVwc16T5N31mbImPbQQSNpTwkMm7mlZzik8CwEjfw0QAnVv4oGeV
-# K2pTy69cXiqcRKEN2Lyc+xllCxNkMpYCBQzaJlM6JYi5lwWzlkLz/4aWtUszmHVj
-# 2d8yHkHgOdRA5cyt6YBP0yS9SGDe5piCaouWZjI4OZtriVdkG7XThIsAWxc5+X9M
-# uGlOhPjrLuUj2xsj26rf8B6uHdo+LaSce8QRrOKVd6ihc0sLB274izqjyRAui5Sf
-# crBRCbRvtpS2y/Vf86A+aw4mLrI3cthbIchK+s24isniJg2Ad0EG6ZBgrwuNmZBp
-# MoVpzGGZcnSraDNoh/EXbIjAz5X2xCqQeSD9D6JIM2kyvqav87CSc4QiMjSDpkw7
-# KaK+kKHMM2g/P2GQreBUdkpbs1Xz5QFc3gbRoFfr18pRvEEEvKTZwL4+E6hSOSXp
-# QLz9zSG6qPnFfyb5hUiTzV7u3oj5X8TjJdF55mCvQWFio2m9OMZxo7ZauQ/leaxh
-# Lsi8w8h/gMLIglRlqqgExOgAkkcZF74M+oIeDpuYY+b3sys5a/Xr8KjpL1xAORen
-# 28xJJFBZfLgq0mFl+a4PPa+vWPDg16LHC4gMbDWa1X9N1Ij6+ksl9SIuX9v3D+0k
-# H3YEAtBPx7Vgfw2mF06jXELCRwIDAQABo4IBSTCCAUUwHQYDVR0OBBYEFLByr1uW
-# oug8+JWvKb2YWYVZvLJSMB8GA1UdIwQYMBaAFJ+nFV0AXmJdg/Tl0mWnG1M1Gely
-# MF8GA1UdHwRYMFYwVKBSoFCGTmh0dHA6Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lv
-# cHMvY3JsL01pY3Jvc29mdCUyMFRpbWUtU3RhbXAlMjBQQ0ElMjAyMDEwKDEpLmNy
-# bDBsBggrBgEFBQcBAQRgMF4wXAYIKwYBBQUHMAKGUGh0dHA6Ly93d3cubWljcm9z
-# b2Z0LmNvbS9wa2lvcHMvY2VydHMvTWljcm9zb2Z0JTIwVGltZS1TdGFtcCUyMFBD
-# QSUyMDIwMTAoMSkuY3J0MAwGA1UdEwEB/wQCMAAwFgYDVR0lAQH/BAwwCgYIKwYB
-# BQUHAwgwDgYDVR0PAQH/BAQDAgeAMA0GCSqGSIb3DQEBCwUAA4ICAQA6NADLPRxX
-# O1MUapdfkktHEUr87+gx7nm4OoQLxV3WBtwzbwoFQ+C9Qg9eb+90M3YhUGRYebAK
-# ngAhzLh1m2S5SZ3R+e7ppP0y+jWd2wunZglwygUsS3dO2uIto76Lgau/RlQu1ZdQ
-# 8Bb8yflJyOCfTFl24Y8EP9ezcnv6B6337xm8GKmyD83umiKZg5WwfEtx6btXld0w
-# 2zK1Ob+4KiaEz/CBHkqUNhNU0BcHFxIox4lqIPdXX4eE2RWWIyXlU4/6fDnFYXnm
-# 72Hp4XYbt4E+pP6pIVD6tAJB0is3TIbVA308muiC4r4UlAl1DN18PdFZWxyIHKBt
-# hpmVPVwYkjUjJDvgNDRQF1Ol94azKsRD08jxDKpUupvarsu0joMkw2mFi76Ov//S
-# ymvVRW/IM+25GdsZBE2LUI7AlyP05iaWQWAo14J9sNPtTe4Q69aiZ6RfrRj+bm61
-# FxQ9V4A92GQH4PENp6/cnXLAM13K73XWcBU+BGTIqAwrdRIsbfsR2Vq0OTwXK4Kv
-# Hi2IfKoc7fATrE/DfZDx7++a5A+gFm5fepR6gUizJkR6cerZJwy6eFypbfZJRUCL
-# mhnhned/t0CA1q7bU0Q/CBb7bCSs2oODsenzIfKg4puAQG7pERBu9J9nkqHg9X5L
-# aDF/a6roahgOeWoAE4xjDPfT0hKLRs8yHzCCB3EwggVZoAMCAQICEzMAAAAVxedr
-# ngKbSZkAAAAAABUwDQYJKoZIhvcNAQELBQAwgYgxCzAJBgNVBAYTAlVTMRMwEQYD
-# VQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNy
-# b3NvZnQgQ29ycG9yYXRpb24xMjAwBgNVBAMTKU1pY3Jvc29mdCBSb290IENlcnRp
-# ZmljYXRlIEF1dGhvcml0eSAyMDEwMB4XDTIxMDkzMDE4MjIyNVoXDTMwMDkzMDE4
-# MzIyNVowfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNV
-# BAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQG
-# A1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTAwggIiMA0GCSqGSIb3
-# DQEBAQUAA4ICDwAwggIKAoICAQDk4aZM57RyIQt5osvXJHm9DtWC0/3unAcH0qls
-# TnXIyjVX9gF/bErg4r25PhdgM/9cT8dm95VTcVrifkpa/rg2Z4VGIwy1jRPPdzLA
-# EBjoYH1qUoNEt6aORmsHFPPFdvWGUNzBRMhxXFExN6AKOG6N7dcP2CZTfDlhAnrE
-# qv1yaa8dq6z2Nr41JmTamDu6GnszrYBbfowQHJ1S/rboYiXcag/PXfT+jlPP1uyF
-# Vk3v3byNpOORj7I5LFGc6XBpDco2LXCOMcg1KL3jtIckw+DJj361VI/c+gVVmG1o
-# O5pGve2krnopN6zL64NF50ZuyjLVwIYwXE8s4mKyzbnijYjklqwBSru+cakXW2dg
-# 3viSkR4dPf0gz3N9QZpGdc3EXzTdEonW/aUgfX782Z5F37ZyL9t9X4C626p+Nuw2
-# TPYrbqgSUei/BQOj0XOmTTd0lBw0gg/wEPK3Rxjtp+iZfD9M269ewvPV2HM9Q07B
-# MzlMjgK8QmguEOqEUUbi0b1qGFphAXPKZ6Je1yh2AuIzGHLXpyDwwvoSCtdjbwzJ
-# NmSLW6CmgyFdXzB0kZSU2LlQ+QuJYfM2BjUYhEfb3BvR/bLUHMVr9lxSUV0S2yW6
-# r1AFemzFER1y7435UsSFF5PAPBXbGjfHCBUYP3irRbb1Hode2o+eFnJpxq57t7c+
-# auIurQIDAQABo4IB3TCCAdkwEgYJKwYBBAGCNxUBBAUCAwEAATAjBgkrBgEEAYI3
-# FQIEFgQUKqdS/mTEmr6CkTxGNSnPEP8vBO4wHQYDVR0OBBYEFJ+nFV0AXmJdg/Tl
-# 0mWnG1M1GelyMFwGA1UdIARVMFMwUQYMKwYBBAGCN0yDfQEBMEEwPwYIKwYBBQUH
-# AgEWM2h0dHA6Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMvRG9jcy9SZXBvc2l0
-# b3J5Lmh0bTATBgNVHSUEDDAKBggrBgEFBQcDCDAZBgkrBgEEAYI3FAIEDB4KAFMA
-# dQBiAEMAQTALBgNVHQ8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAfBgNVHSMEGDAW
-# gBTV9lbLj+iiXGJo0T2UkFvXzpoYxDBWBgNVHR8ETzBNMEugSaBHhkVodHRwOi8v
-# Y3JsLm1pY3Jvc29mdC5jb20vcGtpL2NybC9wcm9kdWN0cy9NaWNSb29DZXJBdXRf
-# MjAxMC0wNi0yMy5jcmwwWgYIKwYBBQUHAQEETjBMMEoGCCsGAQUFBzAChj5odHRw
-# Oi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpL2NlcnRzL01pY1Jvb0NlckF1dF8yMDEw
-# LTA2LTIzLmNydDANBgkqhkiG9w0BAQsFAAOCAgEAnVV9/Cqt4SwfZwExJFvhnnJL
-# /Klv6lwUtj5OR2R4sQaTlz0xM7U518JxNj/aZGx80HU5bbsPMeTCj/ts0aGUGCLu
-# 6WZnOlNN3Zi6th542DYunKmCVgADsAW+iehp4LoJ7nvfam++Kctu2D9IdQHZGN5t
-# ggz1bSNU5HhTdSRXud2f8449xvNo32X2pFaq95W2KFUn0CS9QKC/GbYSEhFdPSfg
-# QJY4rPf5KYnDvBewVIVCs/wMnosZiefwC2qBwoEZQhlSdYo2wh3DYXMuLGt7bj8s
-# CXgU6ZGyqVvfSaN0DLzskYDSPeZKPmY7T7uG+jIa2Zb0j/aRAfbOxnT99kxybxCr
-# dTDFNLB62FD+CljdQDzHVG2dY3RILLFORy3BFARxv2T5JL5zbcqOCb2zAVdJVGTZ
-# c9d/HltEAY5aGZFrDZ+kKNxnGSgkujhLmm77IVRrakURR6nxt67I6IleT53S0Ex2
-# tVdUCbFpAUR+fKFhbHP+CrvsQWY9af3LwUFJfn6Tvsv4O+S3Fb+0zj6lMVGEvL8C
-# wYKiexcdFYmNcP7ntdAoGokLjzbaukz5m/8K6TT4JDVnK+ANuOaMmdbhIurwJ0I9
-# JZTmdHRbatGePu1+oDEzfbzL6Xu/OHBE0ZDxyKs6ijoIYn/ZcGNTTY3ugm2lBRDB
-# cQZqELQdVTNYs6FwZvKhggNWMIICPgIBATCCAQGhgdmkgdYwgdMxCzAJBgNVBAYT
-# AlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYD
-# VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xLTArBgNVBAsTJE1pY3Jvc29mdCBJ
-# cmVsYW5kIE9wZXJhdGlvbnMgTGltaXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1Mg
-# RVNOOjU1MUEtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFt
-# cCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQDX7bpxH/IfXTQOI0UZaG4C/atgGqCB
-# gzCBgKR+MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYD
-# VQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xJjAk
-# BgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMA0GCSqGSIb3DQEB
-# CwUAAgUA62wuDzAiGA8yMDI1MDIyODEyNDM1OVoYDzIwMjUwMzAxMTI0MzU5WjB0
-# MDoGCisGAQQBhFkKBAExLDAqMAoCBQDrbC4PAgEAMAcCAQACAg74MAcCAQACAhOQ
-# MAoCBQDrbX+PAgEAMDYGCisGAQQBhFkKBAIxKDAmMAwGCisGAQQBhFkKAwKgCjAI
-# AgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcNAQELBQADggEBAIMs7UflHZJ/
-# F43mMXWABTm1Y7SL8cceJjv7XcAZozoH2+dQNCmebauV1l7OrC0fVT4CmyC+3ceu
-# FDH5zY0lZNEfPRibpsBGuL6jcqEgJWAO344piF00NVCkpJtqNP/0+IHJdBdukFfT
-# jlOylgMIYubHDfUNKn2aXJxwpiJiIT9dqP3KJXqsELUxoTP30gAWPhq2l1M1szvV
-# lzJr4bZb2doAZtXakmk0+GLXw2rbP7jXNdLooSnLdAcjUd1TmIvgHYo/V8XjOLVM
-# us2V0BQFosjSyU8brqN1ypDYpEeLPjAERV9CZLKrOs5/2T9cLOW798VlkuwcuqMq
-# C31XUFZiU/MxggQNMIIECQIBATCBkzB8MQswCQYDVQQGEwJVUzETMBEGA1UECBMK
-# V2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0
-# IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGltZS1TdGFtcCBQQ0Eg
-# MjAxMAITMwAAAgHRRVmYEMxCTwABAAACATANBglghkgBZQMEAgEFAKCCAUowGgYJ
-# KoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCC6O74QzIw/
-# 9aGkHV22ydgvjiGsJkTppfPSnQl0MzbVRDCB+gYLKoZIhvcNAQkQAi8xgeowgecw
-# geQwgb0EIFhrsjpMlBFybHQdpJNZl0mCjB2uX35muvSkh2oe1zgjMIGYMIGApH4w
-# fDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1Jl
-# ZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQGA1UEAxMd
-# TWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIB0UVZmBDMQk8AAQAA
-# AgEwIgQgb1+Drh+kPBY7gkzvAx1CdFxm90PBSurdsHvaN5GcmKQwDQYJKoZIhvcN
-# AQELBQAEggIAlbKzOufzGzFes0sAoRivz0OgUOpDDzbJgJ1XmOkYh8mJeymoJU3s
-# sWvwb2AA2d7TXGV6ezRJUlNJd+HJ7i7uk58KYKEYElpLZM21E+nDR/87k7Yf+pkg
-# hk9IHwo0I6PmxTqnLzPysCNQ0Gi0UckFpuDHzh46Zm/pFh9q4R7aTr63iXCxt2Mu
-# RnlORtrvzeQJqpvuxreoXkp/7hbnhS/9XL1QTab6Wr52WSRCEQu3tbrjgjMImyIn
-# LOEPdPGpM+tsbw7V8gQvxUDkoTv70Op+JLUHVUVWTBFxKodTLvMfQYdTV/pphmVA
-# vDdjQLvr9BoI+4diIGPzoBNeDQydhCm4TYXG20uECvUPpBjehRh8LYraWEBvEUGG
-# OO6zd4tIV3RyhXNbZNJwxDVXD4Le2xvItNNXA6/fJpZ6iwgE2+8/aBi0Bao15vkT
-# bIP0VUZFtq7wK42VVP+w3bpPt0d5hAOnesjbXIY1WxR6KqzFVTT35lt9h2IU8QaR
-# jt/l/aS/QbQG78lbY92JdybXD1BVB8IJgRgYFibE3H8c0rb9YV0rMuFyWIDLL6jh
-# 4zVeTHAhBh6p0/At6JE/rgc1suNIp2clrfpL3MTLqho8YfNvxvhb5WIcwYN681+B
-# J81VewV7A6ByCUcPt8YetA0bVc1Bt25aK1jpZLpt5iFD1eYi2fJ1Gx0=
-# SIG # End signature block
