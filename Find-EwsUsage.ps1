@@ -22,7 +22,7 @@
     SOFTWARE
 #>
 
-# Version 20250306.1518
+# Version 20250326.0902
 [CmdletBinding(DefaultParameterSetName = '__AllParameterSets')]
 param (
     [ValidateScript({ Test-Path $_ })]
@@ -59,8 +59,20 @@ param (
     [Parameter(ParameterSetName="AppUsage",Mandatory=$False,HelpMessage="The AppId parameter specifies the application ID.")]
     [string]$AppId,
 
+    [Parameter(ParameterSetName="AppUsage",Mandatory=$False,HelpMessage="The AuditQueryId parameter specifies the query ID.")]
+    [string]$AuditQueryId,
+
     [Parameter(Mandatory=$true,HelpMessage="The Operation parameter specifies the operation the script should perform.")] [ValidateSet("GetEwsActivity","GetAppUsage")]
     [string]$Operation = $null,
+
+    [Parameter(Mandatory=$false,HelpMessage="The Operation parameter specifies the operation the script should perform.")] [ValidateSet("NewAuditQuery", "CheckAuditQuery","GetQueryResults")]
+    [string]$AuditQueryStep = $null,
+
+    [Parameter(ParameterSetName="AppUsage",Mandatory=$true,HelpMessage="The QueryType parameter specifies the type of query for EWS usage.")] [ValidateSet("SignInLogs","AuditLogs")]
+    [string]$QueryType,
+
+    [Parameter(ParameterSetName="AppUsage",Mandatory=$false,HelpMessage="The Name parameter specifies the name for the query and value to be appended to the output file.")]
+    [string]$Name,
 
     [Parameter(ParameterSetName="AppUsage",Mandatory=$False,HelpMessage="The StartDate parameter specifies start date for the audit log query.")]
     [datetime]$StartDate=(Get-Date).AddDays(-7),
@@ -1102,6 +1114,28 @@ function GetAppsByApi {
     $Script:ApiPermissions | Export-Csv "$OutputPath\EWS-EntraAppRegistrations-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
 }
 
+function CreateAuditQuery{
+    param(
+        [Parameter(Mandatory=$false)]
+        [string]$Admin
+    )
+    try{
+        Write-Host "Attempting to create a new audit query..." -ForegroundColor Cyan -NoNewline
+        $Body = $Body | ConvertTo-JSON -Depth 6
+        $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries" -AccessToken $Script:Token -Method POST -Body $Body -Endpoint beta # | Out-Null
+        [string]$auditQuery = ($q.Response.Content | ConvertFrom-Json).id
+        Write-Host "OK" -ForegroundColor Green
+        $CSVfilename = getFileName -OutputPath $outputPath
+        @{auditQueryId=$auditQuery} | Export-Csv $CSVfilename -NoTypeInformation
+    }
+    catch {
+        Write-Host "FAILED" -ForegroundColor Red
+        Write-Host "Failed to create the audit query." -ForegroundColor Red
+    }
+    Write-Host "New audit log query created with the id: "#$($auditQuery)"
+    return $auditQuery
+}
+
 #Define variables
 $Script:EWSPermissions = @("EWS.AccessAsUser.All", "full_access_as_app")
 $cloudService = Get-CloudServiceEndpoint $AzureEnvironment
@@ -1112,72 +1146,137 @@ $Script:applicationInfo = @{
 }
 $APIResource = $cloudService.GraphApiEndpoint
 
-#if($Operation -eq "GetEwsActivity") {
-#    $Scope= @("Application.Read.All")
-#}
-
-#Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
-
 switch($Operation) {
     "GetAppUsage"{
-        $Scope= @("AuditLog.Read.All")
-        Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
-        Write-Host "Searching audit logs for the application $($AppId)..." -ForegroundColor Green
-        $OutputFile = "$OutputPath\$($AppId)-SignInEvents-$((Get-Date).ToString("yyyyMMddhhmmss")).csv"
+        switch($QueryType){
+            "SignInLogs"{
+                $Scope= @("AuditLog.Read.All")
+                Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
+                Write-Host "Searching sign-in logs for the application $($AppId)..." -ForegroundColor Green
+                $OutputFile = "$OutputPath\$($AppId)-SignInEvents-$((Get-Date).ToString("yyyyMMddhhmmss")).csv"
+                
+                # Breaking down the sign-in logs requests to hour intervals
+                $StartTime = $StartDate
+                Write-Host "Starting query at $(Get-Date)" -ForegroundColor Cyan
+                while ($StartTime -lt $EndDate) {
+                    $EndTime = $StartTime.AddHours($Interval)
+                    if ($EndTime -gt $EndDate) {
+                        $EndTime = $EndDate
+                    }
+                    $EndTime = $EndTime.ToUniversalTime()
+                    $StartTime = $StartTime.ToUniversalTime()
+                    $EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
+                    $StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
+                    $CurrentProgress = $ProgressPreference
+        #$CurrentView = $PSStyle.Progress.View
+        $ProgressPreference = "Continue"
         
-        # Breaking down the sign-in logs requests to hour intervals
-        $StartTime = $StartDate
-        while ($StartTime -lt $EndDate) {
-            $EndTime = $StartTime.AddHours($Interval)
-            if ($EndTime -gt $EndDate) {
-                $EndTime = $EndDate
-            }
-            $EndTime = $EndTime.ToUniversalTime()
-            $StartTime = $StartTime.ToUniversalTime()
-            $EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
-            $StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
-        
-            # Set the filter for the sign-in log query
-            Write-Progress -Activity "Getting sign-in activity for $($Appid)" -CurrentOperation "Searching between $($StartSearch) and $($EndSearch)"
-            $Query = "auditLogs/signIns?`$filter=createdDateTime ge $StartSearch and createdDateTime le $EndSearch and appId eq '$($AppId)' and (signInEventTypes/any(t:t eq 'interactiveUser') or signInEventTypes/any(t:t eq 'nonInteractiveUser') or signInEventTypes/any(t:t eq 'servicePrincipal'))"
-            $Script:SignInEvents = New-Object System.Collections.ArrayList
-            $results = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $APIResource -Endpoint beta
-            foreach($r in $results.Content.Value){
-                New-Object -TypeName PSCustomObject -Property @{
-                    CreatedDateTime = $r.createdDateTime
-                    UserPrincipalName = $r.userPrincipalName
-                    AppId = $r.appId
-                    AppDisplayName = $r.appDisplayName
-                    IsInteractive = $r.isInteractive
-                    ClientCredentialType = $r.clientCredentialType
-                    SignInEventTypes = $r.signInEventTypes -join ","
-                } | Export-Csv -Path $OutputFile -NoTypeInformation -Append
-            }
-            
-            # Check if response includes more results link
-            while($null -ne $results.Content.'@odata.nextLink') {
-                $Query = $results.Content.'@odata.nextLink'.Substring($results.Content.'@odata.nextLink'.IndexOf("auditLog"))
-                $results = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $APIResource -Endpoint beta
-                foreach($r in $results.Content.Value) {
-                    New-Object -TypeName PSCustomObject -Property @{
-                        CreatedDateTime = $r.createdDateTime
-                        UserPrincipalName = $r.userPrincipalName
-                        AppId = $r.appId
-                        AppDisplayName = $r.appDisplayName
-                        IsInteractive = $r.isInteractive
-                        ClientCredentialType = $r.clientCredentialType
-                        SignInEventTypes = $r.signInEventTypes -join ","
-                    } | Export-Csv -Path $OutputFile -NoTypeInformation -Append
+                    # Set the filter for the sign-in log query
+                    Write-Progress -Activity "Getting sign-in activity for $($Appid)" -CurrentOperation "Searching between $($StartSearch) and $($EndSearch)"
+                    $Query = "auditLogs/signIns?`$filter=createdDateTime ge $StartSearch and createdDateTime le $EndSearch and appId eq '$($AppId)' and (signInEventTypes/any(t:t eq 'interactiveUser') or signInEventTypes/any(t:t eq 'nonInteractiveUser') or signInEventTypes/any(t:t eq 'servicePrincipal'))"
+                    $Script:SignInEvents = New-Object System.Collections.ArrayList
+                    $results = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $APIResource -Endpoint beta
+                    foreach($r in $results.Content.Value){
+                        New-Object -TypeName PSCustomObject -Property @{
+                            CreatedDateTime = $r.createdDateTime
+                            UserPrincipalName = $r.userPrincipalName
+                            AppId = $r.appId
+                            AppDisplayName = $r.appDisplayName
+                            IsInteractive = $r.isInteractive
+                            ClientCredentialType = $r.clientCredentialType
+                            SignInEventTypes = $r.signInEventTypes -join ","
+                        } | Export-Csv -Path $OutputFile -NoTypeInformation -Append
+                    }
+                    
+                    # Check if response includes more results link
+                    while($null -ne $results.Content.'@odata.nextLink') {
+                        $Query = $results.Content.'@odata.nextLink'.Substring($results.Content.'@odata.nextLink'.IndexOf("auditLog"))
+                        $results = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $APIResource -Endpoint beta
+                        foreach($r in $results.Content.Value) {
+                            New-Object -TypeName PSCustomObject -Property @{
+                                CreatedDateTime = $r.createdDateTime
+                                UserPrincipalName = $r.userPrincipalName
+                                AppId = $r.appId
+                                AppDisplayName = $r.appDisplayName
+                                IsInteractive = $r.isInteractive
+                                ClientCredentialType = $r.clientCredentialType
+                                SignInEventTypes = $r.signInEventTypes -join ","
+                            } | Export-Csv -Path $OutputFile -NoTypeInformation -Append
+                        }
+                    }
+
+                    # Move to the next hour
+                    $StartTime = $EndTime
                 }
+
+                # Display the results in a grid view
+                if(Test-Path $OutputFile) {
+                    Import-Csv $OutputFile | Group-Object -Property userPrincipalName,signInEventTypes,appDisplayName | Select-Object Count,@{n='UPN';e={$_.Group[0].userPrincipalName}},@{n='AppId';e={$_.Group[0].AppId}},@{n='signInEventType';e={$_.Group[0].signInEventTypes}},@{n='appDisplayName';e={$_.Group[0].appDisplayName}} | Sort-Object Count -Descending | Out-GridView -Title "EWS Application Results"
+                }
+                Write-Host "Stopped query at $(Get-Date)" -ForegroundColor Cyan
             }
+            "AuditLogs"{
+                $Scope= @("AuditLogsQuery.Read.All")
+                Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
+                switch($AuditQueryStep){
+                    "NewAuditQuery" {
+                        $Hour = (New-TimeSpan -Minutes 60).Ticks
+                        $EndTime = (Get-Date -Date $EndDate).ToUniversalTime()
+                        $Ticks = ([Math]::Round($EndTime.Ticks / $Hour, 0) * $Hour) -as [long]
+                        $EndTime = [datetime]$Ticks
+                        $StartTime = (Get-Date -Date $StartDate).ToUniversalTime()
+                        $Ticks = ([Math]::Round($StartTime.Ticks / $Hour, 0) * $Hour) -as [long]
+                        $StartTime = [datetime]$Ticks
+                        $EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
+                        $StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
+                        $Body = @{
+                            "@odata.type"       = "#microsoft.graph.security.auditLogQuery"
+                            filterStartDateTime = $StartSearch
+                            filterEndDateTime   = $EndSearch
+                            displayName         = "Audit-query-$($Name)"
+                            recordTypeFilters   = @("exchangeItem", "exchangeAggregatedOperation", "exchangeItemAggregated", "exchangeItemGroup")
+                            keywordFilter       = "Client=WebServices"
+                        }
 
-            # Move to the next hour
-            $StartTime = $EndTime
-        }
-
-        # Display the results in a grid view
-        if(Test-Path $OutputFile) {
-            Import-Csv $OutputFile | Group-Object -Property userPrincipalName,signInEventTypes,appDisplayName | Select-Object Count,@{n='UPN';e={$_.Group[0].userPrincipalName}},@{n='AppId';e={$_.Group[0].AppId}},@{n='signInEventType';e={$_.Group[0].signInEventTypes}},@{n='appDisplayName';e={$_.Group[0].appDisplayName}} | Sort-Object Count -Descending | Out-GridView -Title "EWS Application Results"
+                        #Create the audit query
+                        $AuditQueryId = CreateAuditQuery
+                        return $AuditQueryId
+                        exit
+                    }
+                    "CheckAuditQuery" {
+                        Write-Host "Checking the audit query status for $($AuditQueryId)..." -ForegroundColor Cyan -NoNewline
+                        $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries/$($AuditQueryId)" -AccessToken $Script:Token -Method GET -Endpoint beta
+                        Write-Host $q.content.status
+                        exit
+                    }
+                    "GetQueryResults" {
+                        Write-Host "Checking the audit query status for $($AuditQueryId)..." -ForegroundColor Cyan -NoNewline
+                        $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries/$($AuditQueryId)" -AccessToken $Script:Token -Method GET -Endpoint beta
+                        if ($q.Content.status -eq "succeeded") {
+                            Write-Host $q.content.status -ForegroundColor Green
+                            $CSVfilename = getFileName $outputPath
+                            Write-Host "Attempting to get the audit log records for EWS usage." -ForegroundColor Cyan -NoNewline
+                            # Retrieve 1000 records per request instead of the default 150
+                            $r = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries/$($AuditQueryId)/records?`$top=1000" -AccessToken $Script:Token -Method GET -Endpoint beta
+                            # Filter the records for impersonation
+                            $r.Content.value | Select-Object -ExpandProperty AuditData | Select-Object -ExcludeProperty "@odata.type", MailboxOwnerSid, AppAccessContext | Export-Csv $CSVfilename -NoTypeInformation
+                            # Check if response includes more results link
+                            while ($null -ne $r.Content.'@odata.nextLink') {
+                                $Query = $r.Content.'@odata.nextLink'.Substring($r.Content.'@odata.nextLink'.IndexOf("security"))
+                                $r = Invoke-GraphApiRequest -GraphApiUrl $cloudService.graphApiEndpoint -AccessToken $Script:Token -Query $Query -Endpoint beta
+                                $r.Content.value | Select-Object -ExpandProperty AuditData | Select-Object -ExcludeProperty "@odata.type", MailboxOwnerSid, AppAccessContext | Export-Csv $CSVfilename -NoTypeInformation
+                                Write-Host "." -NoNewline
+                            }
+                            #Export results to CSV
+                            Import-Csv $CSVfilename | Group-Object -Property AppId, ClientInfoString | Select-Object Count, @{n = 'AppId'; e = { $_.Group[0].AppId } }, @{n = 'ClientInfoString'; e = { $_.Group[0].ClientInfoString } } | Out-GridView -Title "EWS Application Results"
+                        }
+                        else {
+                            Write-Host "Audit query did not complete successfully. Check query status for more information." -ForegroundColor Yellow
+                        }
+                    }
+                }
+                
+            }
         }
     }
     "GetEwsActivity"{
@@ -1202,24 +1301,13 @@ switch($Operation) {
         $TotalApps = $Apps.Count
         $x = 1
         $CurrentProgress = $ProgressPreference
-        $CurrentView = $PSStyle.Progress.View
+        #$CurrentView = $PSStyle.Progress.View
         $ProgressPreference = "Continue"
         #$PSStyle.Progress.View = "Classic"
         $OutputFile = "$OutputPath\App-SignInActivity-$((Get-Date).ToString("yyyyMMddhhmmss")).csv"
         Write-Host "Starting query at $(Get-Date)" -ForegroundColor Cyan
         foreach($App in $Apps){
             Write-Progress -Activity "Getting sign-in activity for service principals" -CurrentOperation "Processing $($App.ApplicationDisplayName)" -PercentComplete (($x / $TotalApps) * 100)
-            <#
-            $Query = "auditLogs/signIns?`$top=1&`$filter=(signInEventTypes/any(t:t eq 'interactiveUser') or signInEventTypes/any(t:t eq 'nonInteractiveUser') or signInEventTypes/any(t:t eq 'servicePrincipal')) and appId eq '$($App.ApplicationId)'"
-            $Script:SignInEvents = New-Object System.Collections.ArrayList
-            $results = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $APIResource -Endpoint beta
-                New-Object -TypeName PSCustomObject -Property @{
-                    CreatedDateTime = $r.content.value.createdDateTime
-                    AppId = $r.content.value.appId
-                    AppDisplayName = $r.content.value.appDisplayName
-                } | Export-Csv -Path $OutputFile -NoTypeInformation -Append
-            
-            #>
             $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "reports/servicePrincipalSignInActivities?`$filter=appId eq '$($App.ApplicationId)'" -AccessToken $Script:Token -Endpoint beta
             if([string]::IsNullOrEmpty($q.Content.value.appId)){
                 $SpActivity = [PSCustomObject]@{
