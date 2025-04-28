@@ -68,6 +68,14 @@ foreach($app in $EwsApps) {
             break
         }
     }
+    else{
+        #Add found application to list of applications
+        $appObject = [PSCustomObject]@{
+            AppId = $app.AppId
+            DisplayName = $AppsToCheck[$app.AppId]
+        }
+        $Applications.Add($appObject) | Out-Null
+    }
 }
 
 $Applications | Out-GridView  -Title "EWS Applications"
