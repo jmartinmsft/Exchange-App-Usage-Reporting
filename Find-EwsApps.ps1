@@ -60,7 +60,10 @@ foreach($app in $EwsApps) {
             }
             else{
                 Write-Warning "AppId not found"
-                $AppIdsNotFound.Add($app.AppId) | Out-Null
+                $appObject = [PSCustomObject]@{
+                    AppId = $app.AppId
+                }
+                $AppIdsNotFound.Add($appObject) | Out-Null
             }
         }
         catch{
