@@ -29,7 +29,7 @@ param (
     [string] $OutputPath,
 
     [ValidateScript({ Test-Path $_ })]
-    [Parameter(Mandatory = $false, HelpMessage="The EwsUsageReportPath parameter specifies the path for the EWS usage report.")]
+    [Parameter(Mandatory = $true, HelpMessage="The EwsUsageReportPath parameter specifies the path for the EWS usage report.")]
     [string] $EwsUsageReportPath="C:\Temp\Output\EWSWeeklyUsage_4_11_2025_12_10_14.csv"
 )
 
