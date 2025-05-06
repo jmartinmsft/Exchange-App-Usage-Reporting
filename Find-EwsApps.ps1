@@ -22,14 +22,14 @@
     SOFTWARE
 #>
 
-# Version 20250418.0953
+# Version 20250506.1135
 param (
     [ValidateScript({ Test-Path $_ })]
     [Parameter(Mandatory = $true, HelpMessage="The OutputPath parameter specifies the path for the output data.")]
     [string] $OutputPath,
 
     [ValidateScript({ Test-Path $_ })]
-    [Parameter(Mandatory = $true, HelpMessage="The EwsUsageReportPath parameter specifies the path for the EWS usage report.")]
+    [Parameter(Mandatory = $false, HelpMessage="The EwsUsageReportPath parameter specifies the path for the EWS usage report.")]
     [string] $EwsUsageReportPath="C:\Temp\Output\EWSWeeklyUsage_4_11_2025_12_10_14.csv"
 )
 
@@ -45,6 +45,16 @@ $EwsApps = $EwsApps | Sort-Object appid -Unique
 #Get app name for all non-third-party apps
 $Applications = New-Object System.Collections.ArrayList
 $AppIdsNotFound = New-Object System.Collections.ArrayList
+
+if (-not (Get-Module -Name Microsoft.Graph -ListAvailable)) {
+    Write-Error "Microsoft Graph PowerShell module is not installed. Please install it using 'Install-Module -Name Microsoft.Graph.Applications'."
+    exit
+}
+
+if (-not (Get-MgContext)) {
+    Connect-MgGraph -Scopes Application.Read.All -NoWelcome
+}
+
 foreach($app in $EwsApps) {
     if(-not($AppsToCheck.ContainsKey($app.AppId))) { 
         Write-Host "Getting app name for $($app.AppId)"
@@ -75,7 +85,7 @@ foreach($app in $EwsApps) {
         #Add found application to list of applications
         $appObject = [PSCustomObject]@{
             AppId = $app.AppId
-            DisplayName = $AppsToCheck[$app.AppId]
+            DisplayName = "$($AppsToCheck[$app.AppId]) (MSFT)"
         }
         $Applications.Add($appObject) | Out-Null
     }
