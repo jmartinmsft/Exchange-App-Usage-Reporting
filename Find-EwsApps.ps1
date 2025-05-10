@@ -30,7 +30,7 @@ param (
 
     [ValidateScript({ Test-Path $_ })]
     [Parameter(Mandatory = $true, HelpMessage="The EwsUsageReportPath parameter specifies the path for the EWS usage report.")]
-    [string] $EwsUsageReportPath="C:\Temp\Output\EWSWeeklyUsage_4_11_2025_12_10_14.csv"
+    [string] $EwsUsageReportPath
 )
 
 #Download the latest CSV of first party apps
