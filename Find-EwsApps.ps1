@@ -63,17 +63,29 @@ foreach($app in $EwsApps) {
             if(-not([string]::IsNullOrEmpty($Application.DisplayName))){
                 #Add found application to list of applications
                 $appObject = [PSCustomObject]@{
-                    AppId = $Application.Id
+                    AppId = $app.AppId
                     DisplayName = $Application.DisplayName
                 }
                 $Applications.Add($appObject) | Out-Null
             }
             else{
-                Write-Warning "AppId not found"
-                $appObject = [PSCustomObject]@{
-                    AppId = $app.AppId
-                }
-                $AppIdsNotFound.Add($appObject) | Out-Null
+                #Check if the app is a service principal
+                $Application = Get-MgServicePrincipal -Filter "ServicePrincipalNames/any(s:s eq '$($app.AppId)')"
+                if(-not([string]::IsNullOrEmpty($Application.DisplayName))){
+                    #Add found application to list of applications
+                    $appObject = [PSCustomObject]@{
+                        AppId = $app.AppId
+                        DisplayName = $Application.DisplayName
+                    }
+                    $Applications.Add($appObject) | Out-Null
+                    }
+                    else{
+                        Write-Warning "AppId not found"
+                        $appObject = [PSCustomObject]@{
+                            AppId = $app.AppId
+                        }
+                        $AppIdsNotFound.Add($appObject) | Out-Null
+                    }
             }
         }
         catch{
