@@ -22,7 +22,7 @@
     SOFTWARE
 #>
 
-# Version 20250411.1343
+# Version 20250519.1632
 [CmdletBinding(DefaultParameterSetName = '__AllParameterSets')]
 param (
     [ValidateScript({ Test-Path $_ })]
@@ -925,7 +925,10 @@ function Invoke-GraphApiRequest {
         [int]$ExpectedStatusCode = 200,
 
         [Parameter(Mandatory = $true)]
-        [string]$GraphApiUrl
+        [string]$GraphApiUrl,
+
+        [Parameter(Mandatory = $false)]
+        [boolean]$Search = $false
     )
 
     <#
@@ -955,6 +958,10 @@ function Invoke-GraphApiRequest {
         if (-not([System.String]::IsNullOrEmpty($Body))) {
             Write-Verbose "Body: $Body"
             $graphApiRequestParams.Add("Body", $Body)
+        }
+
+        if($Search) {
+            $graphApiRequestParams.Header.add("ConsistencyLevel", "eventual")
         }
 
         Write-Verbose "Graph API uri called: $($graphApiRequestParams.Uri)"
@@ -1062,56 +1069,60 @@ function GetAzureAdServicePrincipals{
     $Script:ServicePrincipals | Export-Csv "$OutputPath\EntraServicePrincipals-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
 }
 
-function GetAppsByApi {
+function GetAzureAdOauth2PermissionGrants{
+    write-host "Getting a list of all Entra OAuth2 permission grants..." -ForegroundColor Green
+    $Script:Oauth2PermissionGrants = New-Object System.Collections.ArrayList
+    $Oauth2PermissionGrantsResults = Invoke-GraphApiRequest -Query "oauth2PermissionGrants?`$select=clientId,scope,resourceId" -AccessToken $Script:Token -GraphApiUrl $APIResource
+    foreach($Oauth2PermissionGrant in $Oauth2PermissionGrantsResults.Content.Value) {
+        $Script:Oauth2PermissionGrants.Add($Oauth2PermissionGrant) | Out-Null
+    }
+    # Check if response includes more results link
+    while($null -ne $Oauth2PermissionGrantsResults.Content.'@odata.nextLink') {
+        $Query = $Oauth2PermissionGrantsResults.Content.'@odata.nextLink'.Substring($Oauth2PermissionGrantsResults.Content.'@odata.nextLink'.IndexOf("oauth2PermissionGrants"))
+        $Oauth2PermissionGrantsResults = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $APIResource
+        foreach($Oauth2PermissionGrant in $Oauth2PermissionGrantsResults.Content.Value){
+            $Script:Oauth2PermissionGrants.Add($Oauth2PermissionGrant) | Out-Null
+        }
+    }
+    $Script:Oauth2PermissionGrants | Export-Csv "$OutputPath\Oauth2PermissionGrants-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
+}
+
+function GetAppsWithApplicationPermissions {
     $Script:ApiPermissions = New-Object System.Collections.ArrayList
-    Write-Host "Filtering app registrations that use the $($Api) API..." -ForegroundColor Green
-    foreach($application in $Script:AadApplications) {
-        Write-Verbose "Checking resource(s) accessed by the applications."
-        foreach($RequiredResourceAccess in $application.requiredResourceAccess) {
-            Write-Verbose "Finding service princlipals that match the resource."
-            $sp = $Script:ServicePrincipals | Where-Object {$_.AppId -eq $RequiredResourceAccess.ResourceAppId}
-            $ExchangeOnlineAccess = $false
-            $GraphAccess = $false
-            if($RequiredResourceAccess.ResourceAppId -eq "00000002-0000-0ff1-ce00-000000000000") {
-                $ExchangeOnlineAccess = $true
-            }
-            elseif ($RequiredResourceAccess.ResourceAppId -eq "00000003-0000-0000-c000-000000000000") {
-                $GraphAccess =$true
-            }
-            if($ExchangeOnlineAccess -or $GraphAccess) {
-                foreach($ResourceAccess in $RequiredResourceAccess.ResourceAccess) {
-                    if($($ResourceAccess.Type) -eq "Scope") {
-                        $AppScope = $sp.Oauth2PermissionScopes | Where-Object {$_.id -eq "$($ResourceAccess.id)"}
-                        $Script:AppPermission = [PSCustomObject]@{
-                            'ApplicationDisplayName'  = $application.displayName
-                            'ApplicationID'           = $application.appId
-                            'PermissionType'          = "Delegate"
-                            'PermissionValue'         = $AppScope.Value
-                            "ResourceDisplayName"     = $RequiredResourceAccess.ResourceAppId
-                        }
-                        if($appScope.value -in $Script:EWSPermissions) {
-                            $Script:ApiPermissions.Add($Script:AppPermission) | Out-Null
-                        }  
-                    }
-                    elseif ($($ResourceAccess.Type) -eq "Role") {
-                        Write-Verbose "Finding application permissions for the application $($application.displayName)."
-                        $AppRole = $sp.appRoles | Where-Object {$_.id -eq "$($ResourceAccess.id)"}
-                        $Script:AppPermission = [PSCustomObject]@{
+    $ExoSpn = $Script:ServicePrincipals | Where-Object {$_.appId -eq "00000002-0000-0ff1-ce00-000000000000"}
+    $EwsAccessAsApp = ($ExoSpn.AppRoles | Where-Object {$_.Value -eq "full_access_as_app"}).Id
+    $Script:AadApplications = $Script:AadApplications | Where-Object {-not([string]::IsNullOrEmpty($_.requiredResourceAccess))}
+    foreach($application in $Script:AadApplications){
+        foreach($r in $application.requiredResourceAccess) {
+            if($r.ResourceAccess.Id -eq $EwsAccessAsApp){
+                $Script:AppPermission = [PSCustomObject]@{
                             'ApplicationDisplayName'  = $application.displayName
                             'ApplicationID'           = $application.appId
                             'PermissionType'          = "Application"
-                            'PermissionValue'         = $AppRole.Value
-                            'ResourceDisplayName'     = $RequiredResourceAccess.ResourceAppId
+                            'PermissionValue'         = "full_access_as_app"
+                            'ResourceDisplayName'     = $application.RequiredResourceAccess.ResourceAppId
                         }
-                        if($appRole.value -in $Script:EWSPermissions -and $ExchangeOnlineAccess) {
-                            $Script:ApiPermissions.Add($Script:AppPermission) | Out-Null
-                        }
-                    }
-                }
+                        $Script:ApiPermissions.Add($Script:AppPermission) | Out-Null
             }
         }
     }
-    $Script:ApiPermissions | Export-Csv "$OutputPath\EWS-EntraAppRegistrations-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
+}
+
+function GetAppsByOAuthPermissionGrant{
+    Write-Host "Getting application IDs for applications that have the EWS.AccessAsUser.All permission..." -ForegroundColor Green
+    foreach($Oauth2PermissionGrant in $Script:Oauth2PermissionGrants) {
+        if($Oauth2PermissionGrant.scope -like "*EWS.AccessAsUser.All*") {
+            $AadApplicationResults = $Script:ServicePrincipals | Where-Object {$_.Id -eq $Oauth2PermissionGrant.clientId}
+            $Script:AppPermission = [PSCustomObject]@{
+                    'ApplicationDisplayName'  = $AadApplicationResults.displayName
+                    'ApplicationID'           = $AadApplicationResults.appId
+                    'PermissionType'          = "Delegate"
+                    'PermissionValue'         = "EWS.AccessAsUser.All"
+                    'ResourceDisplayName'     = $Oauth2PermissionGrant.resourceId
+            }
+            $Script:ApiPermissions.Add($Script:AppPermission) | Out-Null
+        }
+    }
 }
 
 function CreateAuditQuery{
@@ -1286,7 +1297,7 @@ switch($Operation) {
         }
     }
     "GetEwsActivity"{
-        $Scope= @("Application.Read.All")
+        $Scope= @("Application.Read.All","Directory.Read.All")
         Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
 
         # Call function to obtain list of app registrations from Entra
@@ -1295,9 +1306,17 @@ switch($Operation) {
         # Call function to obtain list of service principals from Entra
         GetAzureAdServicePrincipals
 
-        # Call function to Filter app registrations using the selected API
-        GetAppsByApi
+        # Call function to obtain list of OAuth2 permission grants from Entra
+        GetAzureAdOauth2PermissionGrants
 
+        # Call function to get list of applications with EWS application permissions
+        GetAppsWithApplicationPermissions
+
+        # Call function to get list of applications with EWS delegated permissions
+        GetAppsByOAuthPermissionGrant
+
+        $Script:ApiPermissions | Export-Csv "$OutputPath\EWS-ApiPermissions-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
+        
         Write-Host "The following applications have permissions to access the EWS API: `n" -ForegroundColor Green
         $Apps = $Script:ApiPermissions | Sort-Object -Property ApplicationId -Unique | Select-Object ApplicationId,ApplicationDisplayName
         $AppActivity = New-Object System.Collections.ArrayList
@@ -1310,7 +1329,7 @@ switch($Operation) {
         try { $PSStyle.Progress.View = "Classic" }
         catch { $CurrentView = $null }
         $OutputFile = "$OutputPath\App-SignInActivity-$((Get-Date).ToString("yyyyMMddhhmmss")).csv"
-        Write-Host "Starting query at $(Get-Date)" -ForegroundColor Cyan
+        
         foreach($App in $Apps){
             Write-Progress -Activity "Getting sign-in activity for service principals" -CurrentOperation "Processing $($App.ApplicationDisplayName)" -PercentComplete (($x / $TotalApps) * 100)
             $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "reports/servicePrincipalSignInActivities?`$filter=appId eq '$($App.ApplicationId)'" -AccessToken $Script:Token -Endpoint beta
@@ -1336,227 +1355,10 @@ switch($Operation) {
         $AppActivity | Sort-Object -Property LastSignIn | Format-Table -AutoSize
         $AppActivity | Export-Csv -Path $OutputFile -NoTypeInformation
         $ProgressPreference = $CurrentProgress
-        if([string]::IsNullOrEmpty($CurrentView)){
+        try{
             $PSStyle.Progress.View = $CurrentView
         }
-        Write-Host "Query completed at $(Get-Date)" -ForegroundColor Cyan
+        catch{}
         exit
     }
 }
-# SIG # Begin signature block
-# MIIoSAYJKoZIhvcNAQcCoIIoOTCCKDUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBSTaYzjnR0q05p
-# FWWlwojPQlffmqvtI+Br4kq5O9CQKKCCDXYwggX0MIID3KADAgECAhMzAAAEBGx0
-# Bv9XKydyAAAAAAQEMA0GCSqGSIb3DQEBCwUAMH4xCzAJBgNVBAYTAlVTMRMwEQYD
-# VQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNy
-# b3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBDb2RlIFNpZ25p
-# bmcgUENBIDIwMTEwHhcNMjQwOTEyMjAxMTE0WhcNMjUwOTExMjAxMTE0WjB0MQsw
-# CQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9u
-# ZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMR4wHAYDVQQDExVNaWNy
-# b3NvZnQgQ29ycG9yYXRpb24wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIB
-# AQC0KDfaY50MDqsEGdlIzDHBd6CqIMRQWW9Af1LHDDTuFjfDsvna0nEuDSYJmNyz
-# NB10jpbg0lhvkT1AzfX2TLITSXwS8D+mBzGCWMM/wTpciWBV/pbjSazbzoKvRrNo
-# DV/u9omOM2Eawyo5JJJdNkM2d8qzkQ0bRuRd4HarmGunSouyb9NY7egWN5E5lUc3
-# a2AROzAdHdYpObpCOdeAY2P5XqtJkk79aROpzw16wCjdSn8qMzCBzR7rvH2WVkvF
-# HLIxZQET1yhPb6lRmpgBQNnzidHV2Ocxjc8wNiIDzgbDkmlx54QPfw7RwQi8p1fy
-# 4byhBrTjv568x8NGv3gwb0RbAgMBAAGjggFzMIIBbzAfBgNVHSUEGDAWBgorBgEE
-# AYI3TAgBBggrBgEFBQcDAzAdBgNVHQ4EFgQU8huhNbETDU+ZWllL4DNMPCijEU4w
-# RQYDVR0RBD4wPKQ6MDgxHjAcBgNVBAsTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEW
-# MBQGA1UEBRMNMjMwMDEyKzUwMjkyMzAfBgNVHSMEGDAWgBRIbmTlUAXTgqoXNzci
-# tW2oynUClTBUBgNVHR8ETTBLMEmgR6BFhkNodHRwOi8vd3d3Lm1pY3Jvc29mdC5j
-# b20vcGtpb3BzL2NybC9NaWNDb2RTaWdQQ0EyMDExXzIwMTEtMDctMDguY3JsMGEG
-# CCsGAQUFBwEBBFUwUzBRBggrBgEFBQcwAoZFaHR0cDovL3d3dy5taWNyb3NvZnQu
-# Y29tL3BraW9wcy9jZXJ0cy9NaWNDb2RTaWdQQ0EyMDExXzIwMTEtMDctMDguY3J0
-# MAwGA1UdEwEB/wQCMAAwDQYJKoZIhvcNAQELBQADggIBAIjmD9IpQVvfB1QehvpC
-# Ge7QeTQkKQ7j3bmDMjwSqFL4ri6ae9IFTdpywn5smmtSIyKYDn3/nHtaEn0X1NBj
-# L5oP0BjAy1sqxD+uy35B+V8wv5GrxhMDJP8l2QjLtH/UglSTIhLqyt8bUAqVfyfp
-# h4COMRvwwjTvChtCnUXXACuCXYHWalOoc0OU2oGN+mPJIJJxaNQc1sjBsMbGIWv3
-# cmgSHkCEmrMv7yaidpePt6V+yPMik+eXw3IfZ5eNOiNgL1rZzgSJfTnvUqiaEQ0X
-# dG1HbkDv9fv6CTq6m4Ty3IzLiwGSXYxRIXTxT4TYs5VxHy2uFjFXWVSL0J2ARTYL
-# E4Oyl1wXDF1PX4bxg1yDMfKPHcE1Ijic5lx1KdK1SkaEJdto4hd++05J9Bf9TAmi
-# u6EK6C9Oe5vRadroJCK26uCUI4zIjL/qG7mswW+qT0CW0gnR9JHkXCWNbo8ccMk1
-# sJatmRoSAifbgzaYbUz8+lv+IXy5GFuAmLnNbGjacB3IMGpa+lbFgih57/fIhamq
-# 5VhxgaEmn/UjWyr+cPiAFWuTVIpfsOjbEAww75wURNM1Imp9NJKye1O24EspEHmb
-# DmqCUcq7NqkOKIG4PVm3hDDED/WQpzJDkvu4FrIbvyTGVU01vKsg4UfcdiZ0fQ+/
-# V0hf8yrtq9CkB8iIuk5bBxuPMIIHejCCBWKgAwIBAgIKYQ6Q0gAAAAAAAzANBgkq
-# hkiG9w0BAQsFADCBiDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24x
-# EDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlv
-# bjEyMDAGA1UEAxMpTWljcm9zb2Z0IFJvb3QgQ2VydGlmaWNhdGUgQXV0aG9yaXR5
-# IDIwMTEwHhcNMTEwNzA4MjA1OTA5WhcNMjYwNzA4MjEwOTA5WjB+MQswCQYDVQQG
-# EwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwG
-# A1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSgwJgYDVQQDEx9NaWNyb3NvZnQg
-# Q29kZSBTaWduaW5nIFBDQSAyMDExMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIIC
-# CgKCAgEAq/D6chAcLq3YbqqCEE00uvK2WCGfQhsqa+laUKq4BjgaBEm6f8MMHt03
-# a8YS2AvwOMKZBrDIOdUBFDFC04kNeWSHfpRgJGyvnkmc6Whe0t+bU7IKLMOv2akr
-# rnoJr9eWWcpgGgXpZnboMlImEi/nqwhQz7NEt13YxC4Ddato88tt8zpcoRb0Rrrg
-# OGSsbmQ1eKagYw8t00CT+OPeBw3VXHmlSSnnDb6gE3e+lD3v++MrWhAfTVYoonpy
-# 4BI6t0le2O3tQ5GD2Xuye4Yb2T6xjF3oiU+EGvKhL1nkkDstrjNYxbc+/jLTswM9
-# sbKvkjh+0p2ALPVOVpEhNSXDOW5kf1O6nA+tGSOEy/S6A4aN91/w0FK/jJSHvMAh
-# dCVfGCi2zCcoOCWYOUo2z3yxkq4cI6epZuxhH2rhKEmdX4jiJV3TIUs+UsS1Vz8k
-# A/DRelsv1SPjcF0PUUZ3s/gA4bysAoJf28AVs70b1FVL5zmhD+kjSbwYuER8ReTB
-# w3J64HLnJN+/RpnF78IcV9uDjexNSTCnq47f7Fufr/zdsGbiwZeBe+3W7UvnSSmn
-# Eyimp31ngOaKYnhfsi+E11ecXL93KCjx7W3DKI8sj0A3T8HhhUSJxAlMxdSlQy90
-# lfdu+HggWCwTXWCVmj5PM4TasIgX3p5O9JawvEagbJjS4NaIjAsCAwEAAaOCAe0w
-# ggHpMBAGCSsGAQQBgjcVAQQDAgEAMB0GA1UdDgQWBBRIbmTlUAXTgqoXNzcitW2o
-# ynUClTAZBgkrBgEEAYI3FAIEDB4KAFMAdQBiAEMAQTALBgNVHQ8EBAMCAYYwDwYD
-# VR0TAQH/BAUwAwEB/zAfBgNVHSMEGDAWgBRyLToCMZBDuRQFTuHqp8cx0SOJNDBa
-# BgNVHR8EUzBRME+gTaBLhklodHRwOi8vY3JsLm1pY3Jvc29mdC5jb20vcGtpL2Ny
-# bC9wcm9kdWN0cy9NaWNSb29DZXJBdXQyMDExXzIwMTFfMDNfMjIuY3JsMF4GCCsG
-# AQUFBwEBBFIwUDBOBggrBgEFBQcwAoZCaHR0cDovL3d3dy5taWNyb3NvZnQuY29t
-# L3BraS9jZXJ0cy9NaWNSb29DZXJBdXQyMDExXzIwMTFfMDNfMjIuY3J0MIGfBgNV
-# HSAEgZcwgZQwgZEGCSsGAQQBgjcuAzCBgzA/BggrBgEFBQcCARYzaHR0cDovL3d3
-# dy5taWNyb3NvZnQuY29tL3BraW9wcy9kb2NzL3ByaW1hcnljcHMuaHRtMEAGCCsG
-# AQUFBwICMDQeMiAdAEwAZQBnAGEAbABfAHAAbwBsAGkAYwB5AF8AcwB0AGEAdABl
-# AG0AZQBuAHQALiAdMA0GCSqGSIb3DQEBCwUAA4ICAQBn8oalmOBUeRou09h0ZyKb
-# C5YR4WOSmUKWfdJ5DJDBZV8uLD74w3LRbYP+vj/oCso7v0epo/Np22O/IjWll11l
-# hJB9i0ZQVdgMknzSGksc8zxCi1LQsP1r4z4HLimb5j0bpdS1HXeUOeLpZMlEPXh6
-# I/MTfaaQdION9MsmAkYqwooQu6SpBQyb7Wj6aC6VoCo/KmtYSWMfCWluWpiW5IP0
-# wI/zRive/DvQvTXvbiWu5a8n7dDd8w6vmSiXmE0OPQvyCInWH8MyGOLwxS3OW560
-# STkKxgrCxq2u5bLZ2xWIUUVYODJxJxp/sfQn+N4sOiBpmLJZiWhub6e3dMNABQam
-# ASooPoI/E01mC8CzTfXhj38cbxV9Rad25UAqZaPDXVJihsMdYzaXht/a8/jyFqGa
-# J+HNpZfQ7l1jQeNbB5yHPgZ3BtEGsXUfFL5hYbXw3MYbBL7fQccOKO7eZS/sl/ah
-# XJbYANahRr1Z85elCUtIEJmAH9AAKcWxm6U/RXceNcbSoqKfenoi+kiVH6v7RyOA
-# 9Z74v2u3S5fi63V4GuzqN5l5GEv/1rMjaHXmr/r8i+sLgOppO6/8MO0ETI7f33Vt
-# Y5E90Z1WTk+/gFcioXgRMiF670EKsT/7qMykXcGhiJtXcVZOSEXAQsmbdlsKgEhr
-# /Xmfwb1tbWrJUnMTDXpQzTGCGigwghokAgEBMIGVMH4xCzAJBgNVBAYTAlVTMRMw
-# EQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVN
-# aWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBDb2RlIFNp
-# Z25pbmcgUENBIDIwMTECEzMAAAQEbHQG/1crJ3IAAAAABAQwDQYJYIZIAWUDBAIB
-# BQCggbAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEO
-# MAwGCisGAQQBgjcCARUwLwYJKoZIhvcNAQkEMSIEIMqHYEvq7qfc3xoDp5FeahbB
-# at3EVWaCFojQohhyJDQYMEQGCisGAQQBgjcCAQwxNjA0oBSAEgBNAGkAYwByAG8A
-# cwBvAGYAdKEcgBpodHRwczovL3d3dy5taWNyb3NvZnQuY29tIDANBgkqhkiG9w0B
-# AQEFAASCAQCI5UcN0vJ1JhVWFdLgk2y76Zk2n1q1LIPsqGf9P8SniZFiAb2W8NXO
-# oM4U/aNWzRxLPN8lDaDNyAJR3Na8ZGVfhRiSV+xVzsb80jTS0x892MEz2Woks/WT
-# 4EHDZVASRJapHJOICUztvE8AnmkHSa33VaJ7LVAxnbFcXKDYkxoUmwGZBU9ZVrPt
-# nThomEkWnCJsPzhe7UCE39RyLNUjroGvroUGlR3R6CwYkhIVUPOSgEJou1gQ+yRU
-# TdCUs4z2aT9jejo2l7zGbJ36rMD05IrWXQfsd8lsreA0+YfGtJWf6hwhtoaZxJVI
-# bD0SSxzJzQa8VzgXIaLC3UR9xsgtPLryoYIXsDCCF6wGCisGAQQBgjcDAwExghec
-# MIIXmAYJKoZIhvcNAQcCoIIXiTCCF4UCAQMxDzANBglghkgBZQMEAgEFADCCAVoG
-# CyqGSIb3DQEJEAEEoIIBSQSCAUUwggFBAgEBBgorBgEEAYRZCgMBMDEwDQYJYIZI
-# AWUDBAIBBQAEIBSiODmNCEvdeHh/I6joyctscKKXu5Mqv+mO/IwCr/ijAgZn7ToJ
-# OeMYEzIwMjUwNDExMTgwNTQ5LjQxNFowBIACAfSggdmkgdYwgdMxCzAJBgNVBAYT
-# AlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYD
-# VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xLTArBgNVBAsTJE1pY3Jvc29mdCBJ
-# cmVsYW5kIE9wZXJhdGlvbnMgTGltaXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1Mg
-# RVNOOjU3MUEtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFt
-# cCBTZXJ2aWNloIIR/jCCBygwggUQoAMCAQICEzMAAAH7y8tsN2flMJUAAQAAAfsw
-# DQYJKoZIhvcNAQELBQAwfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0
-# b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3Jh
-# dGlvbjEmMCQGA1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTAwHhcN
-# MjQwNzI1MTgzMTEzWhcNMjUxMDIyMTgzMTEzWjCB0zELMAkGA1UEBhMCVVMxEzAR
-# BgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1p
-# Y3Jvc29mdCBDb3Jwb3JhdGlvbjEtMCsGA1UECxMkTWljcm9zb2Z0IElyZWxhbmQg
-# T3BlcmF0aW9ucyBMaW1pdGVkMScwJQYDVQQLEx5uU2hpZWxkIFRTUyBFU046NTcx
-# QS0wNUUwLUQ5NDcxJTAjBgNVBAMTHE1pY3Jvc29mdCBUaW1lLVN0YW1wIFNlcnZp
-# Y2UwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQCowlZB5YCrgvC9KNiy
-# M/RS+G+bSPRoA4mIwuDSwt/EqhNcB0oPqgy6rmsXmgSI7FX72jHQf3lDx+GhmrfH
-# 2XGC5nJM4riXbG1yC0kK2NdGWUzZtOmM6DflFSsHLRwCWgFT0YkGzssE2txsfqsG
-# I6+oNA2Jw9FnCrXrHKMyJ1TUnUAm5q33Iufu1qJ+gPnxuVgRwG+SPl0fWVr3NTzj
-# pAN46hE7o1yocuwPHz/NUpnE/fSZbpjtEyyq0HxwYKAbBVW6s6do0tezfWpNFPJU
-# dfymk52hKKEJd6p5uAkJHMbzMb97+TShoGMUUaX7y4UQvALKHjAr1nn5rNPN9rYY
-# PinqKG2yRezeWdbTlQp8MmEAAO3q+I5zRGT9zzM6KrOHSUql/95ZRjaj+G9wM9k2
-# Atoe/J8OpvwBZoq87fqJFlJeqFLDxLEmjRMKmxsKOa3HQukeeptvVQXtyrT2QJx9
-# ZMM9w3XaltgupyTRsgh88ptzseeuQ1CSz+ZJtVlOcPJPc7zMX2rgMJ9Z6xKvVqTJ
-# wN24bEJ0oG+C0mHVjEOrWyRPB5jHmIBZecHsozKWzdZBltO5tMIsu3xefy36yVwq
-# bkOS+hu5uYdKuK5MDfBPIjLgXFqZMqbRUO72ZZ2zwy2NRIlXA1VWUFdpDdkxxWOK
-# PJWhQ1W4Fj0xzBhwhArrbBDbQQIDAQABo4IBSTCCAUUwHQYDVR0OBBYEFEdVIZhQ
-# 1DdHA6XvXMgC5SMgqDUqMB8GA1UdIwQYMBaAFJ+nFV0AXmJdg/Tl0mWnG1M1Gely
-# MF8GA1UdHwRYMFYwVKBSoFCGTmh0dHA6Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lv
-# cHMvY3JsL01pY3Jvc29mdCUyMFRpbWUtU3RhbXAlMjBQQ0ElMjAyMDEwKDEpLmNy
-# bDBsBggrBgEFBQcBAQRgMF4wXAYIKwYBBQUHMAKGUGh0dHA6Ly93d3cubWljcm9z
-# b2Z0LmNvbS9wa2lvcHMvY2VydHMvTWljcm9zb2Z0JTIwVGltZS1TdGFtcCUyMFBD
-# QSUyMDIwMTAoMSkuY3J0MAwGA1UdEwEB/wQCMAAwFgYDVR0lAQH/BAwwCgYIKwYB
-# BQUHAwgwDgYDVR0PAQH/BAQDAgeAMA0GCSqGSIb3DQEBCwUAA4ICAQDDOggo5jZ2
-# dSN9a4yIajP+i+hzV7zpXBZpk0V2BGY6hC5F7ict21k421Mc2TdKPeeTIGzPPFJt
-# kRDQN27Ioccjk/xXzuMW20aeVHTA8/bYUB5tu8Bu62QwxVAwXOFUFaJYPRUCe73H
-# R+OJ8soMBVcvCi6fmsIWrBtqxcVzsf/QM+IL4MGfe1TF5+9zFQLKzj4MLezwJint
-# ZZelnxZv+90GEOWIeYHulZyawHze5zj8/YaYAjccyQ4S7t8JpJihCGi5Y6vTuX8o
-# zhOd3KUiKubx/ZbBdBwUTOZS8hIzqW51TAaVU19NMlSrZtMMR3e2UMq1X0BRjeuu
-# cXAdPAmvIu1PggWG+AF80PeYvV55JqQp/vFMgjgnK3XlJeEd3mgj9caNKDKSAmtY
-# DnusacALuu7f9lsU0Iwr8mPpfxfgvqYE5hrY0YrAfgDftgYOt5wn+pddZRi98tio
-# cZ/xOFiXXZiDWvBIqlYuiUD8HV6oHDhNFy9VjQi802Lmyb7/8cn0DDo0m5H+4NHt
-# fu8NeJylcyVE2AUzIANvwAUi9A90epxGlGitj5hQaW/N4nH/aA1jJ7MCiRusWEAK
-# wnYF/J4vIISjoC7AQefnXU8oTx0rgm+WYtKgePtUVHc0cOTfNGTHQTGSYXxo52m+
-# gqG7AELGhn8mFvNLOu9nvgZWMoojK3kUDTCCB3EwggVZoAMCAQICEzMAAAAVxedr
-# ngKbSZkAAAAAABUwDQYJKoZIhvcNAQELBQAwgYgxCzAJBgNVBAYTAlVTMRMwEQYD
-# VQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNy
-# b3NvZnQgQ29ycG9yYXRpb24xMjAwBgNVBAMTKU1pY3Jvc29mdCBSb290IENlcnRp
-# ZmljYXRlIEF1dGhvcml0eSAyMDEwMB4XDTIxMDkzMDE4MjIyNVoXDTMwMDkzMDE4
-# MzIyNVowfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNV
-# BAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQG
-# A1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTAwggIiMA0GCSqGSIb3
-# DQEBAQUAA4ICDwAwggIKAoICAQDk4aZM57RyIQt5osvXJHm9DtWC0/3unAcH0qls
-# TnXIyjVX9gF/bErg4r25PhdgM/9cT8dm95VTcVrifkpa/rg2Z4VGIwy1jRPPdzLA
-# EBjoYH1qUoNEt6aORmsHFPPFdvWGUNzBRMhxXFExN6AKOG6N7dcP2CZTfDlhAnrE
-# qv1yaa8dq6z2Nr41JmTamDu6GnszrYBbfowQHJ1S/rboYiXcag/PXfT+jlPP1uyF
-# Vk3v3byNpOORj7I5LFGc6XBpDco2LXCOMcg1KL3jtIckw+DJj361VI/c+gVVmG1o
-# O5pGve2krnopN6zL64NF50ZuyjLVwIYwXE8s4mKyzbnijYjklqwBSru+cakXW2dg
-# 3viSkR4dPf0gz3N9QZpGdc3EXzTdEonW/aUgfX782Z5F37ZyL9t9X4C626p+Nuw2
-# TPYrbqgSUei/BQOj0XOmTTd0lBw0gg/wEPK3Rxjtp+iZfD9M269ewvPV2HM9Q07B
-# MzlMjgK8QmguEOqEUUbi0b1qGFphAXPKZ6Je1yh2AuIzGHLXpyDwwvoSCtdjbwzJ
-# NmSLW6CmgyFdXzB0kZSU2LlQ+QuJYfM2BjUYhEfb3BvR/bLUHMVr9lxSUV0S2yW6
-# r1AFemzFER1y7435UsSFF5PAPBXbGjfHCBUYP3irRbb1Hode2o+eFnJpxq57t7c+
-# auIurQIDAQABo4IB3TCCAdkwEgYJKwYBBAGCNxUBBAUCAwEAATAjBgkrBgEEAYI3
-# FQIEFgQUKqdS/mTEmr6CkTxGNSnPEP8vBO4wHQYDVR0OBBYEFJ+nFV0AXmJdg/Tl
-# 0mWnG1M1GelyMFwGA1UdIARVMFMwUQYMKwYBBAGCN0yDfQEBMEEwPwYIKwYBBQUH
-# AgEWM2h0dHA6Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMvRG9jcy9SZXBvc2l0
-# b3J5Lmh0bTATBgNVHSUEDDAKBggrBgEFBQcDCDAZBgkrBgEEAYI3FAIEDB4KAFMA
-# dQBiAEMAQTALBgNVHQ8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAfBgNVHSMEGDAW
-# gBTV9lbLj+iiXGJo0T2UkFvXzpoYxDBWBgNVHR8ETzBNMEugSaBHhkVodHRwOi8v
-# Y3JsLm1pY3Jvc29mdC5jb20vcGtpL2NybC9wcm9kdWN0cy9NaWNSb29DZXJBdXRf
-# MjAxMC0wNi0yMy5jcmwwWgYIKwYBBQUHAQEETjBMMEoGCCsGAQUFBzAChj5odHRw
-# Oi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpL2NlcnRzL01pY1Jvb0NlckF1dF8yMDEw
-# LTA2LTIzLmNydDANBgkqhkiG9w0BAQsFAAOCAgEAnVV9/Cqt4SwfZwExJFvhnnJL
-# /Klv6lwUtj5OR2R4sQaTlz0xM7U518JxNj/aZGx80HU5bbsPMeTCj/ts0aGUGCLu
-# 6WZnOlNN3Zi6th542DYunKmCVgADsAW+iehp4LoJ7nvfam++Kctu2D9IdQHZGN5t
-# ggz1bSNU5HhTdSRXud2f8449xvNo32X2pFaq95W2KFUn0CS9QKC/GbYSEhFdPSfg
-# QJY4rPf5KYnDvBewVIVCs/wMnosZiefwC2qBwoEZQhlSdYo2wh3DYXMuLGt7bj8s
-# CXgU6ZGyqVvfSaN0DLzskYDSPeZKPmY7T7uG+jIa2Zb0j/aRAfbOxnT99kxybxCr
-# dTDFNLB62FD+CljdQDzHVG2dY3RILLFORy3BFARxv2T5JL5zbcqOCb2zAVdJVGTZ
-# c9d/HltEAY5aGZFrDZ+kKNxnGSgkujhLmm77IVRrakURR6nxt67I6IleT53S0Ex2
-# tVdUCbFpAUR+fKFhbHP+CrvsQWY9af3LwUFJfn6Tvsv4O+S3Fb+0zj6lMVGEvL8C
-# wYKiexcdFYmNcP7ntdAoGokLjzbaukz5m/8K6TT4JDVnK+ANuOaMmdbhIurwJ0I9
-# JZTmdHRbatGePu1+oDEzfbzL6Xu/OHBE0ZDxyKs6ijoIYn/ZcGNTTY3ugm2lBRDB
-# cQZqELQdVTNYs6FwZvKhggNZMIICQQIBATCCAQGhgdmkgdYwgdMxCzAJBgNVBAYT
-# AlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYD
-# VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xLTArBgNVBAsTJE1pY3Jvc29mdCBJ
-# cmVsYW5kIE9wZXJhdGlvbnMgTGltaXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1Mg
-# RVNOOjU3MUEtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFt
-# cCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQAEcefs0Ia6xnPZF9VvK7BjA/KQFaCB
-# gzCBgKR+MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYD
-# VQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xJjAk
-# BgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMA0GCSqGSIb3DQEB
-# CwUAAgUA66OVbzAiGA8yMDI1MDQxMTEzMTk0M1oYDzIwMjUwNDEyMTMxOTQzWjB3
-# MD0GCisGAQQBhFkKBAExLzAtMAoCBQDro5VvAgEAMAoCAQACAgcmAgH/MAcCAQAC
-# AhOHMAoCBQDrpObvAgEAMDYGCisGAQQBhFkKBAIxKDAmMAwGCisGAQQBhFkKAwKg
-# CjAIAgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcNAQELBQADggEBAAkKKnsH
-# iAC44w7DUFQbcIavKQ5NjtqAbEAyADceuPYeGq8anoq1zle2syj61NNU1b1G+rf2
-# 1Mjqc2b67nPR4qkqwb5VQ6Y4e2crNmUdazf+BK/P7eK/j8+byevMu6FK9N0UUUzJ
-# NIIEUdcNpy9oqJFcheGtFtd606sAzPNLuJqlzSD3klUR8yO82K2ZaSw1be0asp+Z
-# qprqSqY3rHMgfADzMemX3RNG89tJZa+tqFStMODhCTSnDQcQdQE4iBrx+Lcrytit
-# yj7n8wzW0yxSQV3NP+gz3pl0ERXvY6jYxJwCk7GqjpftdIBtXAFvilMTrsDYwSoR
-# dVoNcLs6cga3hwQxggQNMIIECQIBATCBkzB8MQswCQYDVQQGEwJVUzETMBEGA1UE
-# CBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9z
-# b2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGltZS1TdGFtcCBQ
-# Q0EgMjAxMAITMwAAAfvLy2w3Z+UwlQABAAAB+zANBglghkgBZQMEAgEFAKCCAUow
-# GgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCBypdfL
-# KGx3vXQugNcP6KYowgsZovc38/LNj5qYNteTrDCB+gYLKoZIhvcNAQkQAi8xgeow
-# gecwgeQwgb0EIDnbAqv8oIWVU1iJawIuwHiqGMRgQ/fEepioO7VJJOUYMIGYMIGA
-# pH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcT
-# B1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQGA1UE
-# AxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAH7y8tsN2flMJUA
-# AQAAAfswIgQgvy9zHgS+wCI+AZT/FzehCOqUTllqcmRz7HuzvaiecEYwDQYJKoZI
-# hvcNAQELBQAEggIAODqymKtEiTfO397vpLsUSZtt1w8w3M8yIx7dqBJH1j7vPXke
-# CrhKvX2hy61uPb2vJAVzxtXvFtpsLGQ+z4ig+Itwszs6akq8Tu6N7AMfAfaAn3Gp
-# C9QQYrpWvjqH1rtM4uIIulb6Gf4D5Z4Nf9lhQCdExS5S/hEP+xe9T3z1RAf7p5z1
-# o41w0XwcL5IqB/xXtYG4OrzU1MisrAqvMm3FtD/XaFNsPGzZumFrJUBLBsztod0X
-# D3P10vdxdq2x4K/Wr0WlLbxGeSmf77drIsHjnNOtIOLnZ5PXH1Bc2os4vtAUnSvt
-# Eha0Oz8UsnRKhSCL4yr2N8FTqZ2/MmxVGL9LeJ2D0nBGQZsg1GWjBGJMl5dDozer
-# rojPJaVyiNDOVhUFaFGm9wvl5n6bCzvMa65FWTaeNvoLRfDiSAsMRFaY/Q/nT6mf
-# mwBwIqYRmc8NcZM1HOwMltNTCvN+IFxja+iUjq+0ycz2gS5G/qS7tcFxqkBjfOSP
-# BdXcBgwfkuzei5h8chudAnE/JME6JrQS8WaiTmBubdPbC9DdM6T0RMs/I/2KiuRX
-# qnYkINWOoc8mT6mYnwEFQtAtxy+UDyoOehMjiR6D8FTDeF8ifWJGR7jhTQd1lCLU
-# bN+/lpMhl0KEAD78zfgHan2pqDo1s4rHIqgnlUXQ4EYCJz7WlGTD/L6UamA=
-# SIG # End signature block
