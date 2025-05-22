@@ -1022,10 +1022,10 @@ function getFileName{
         Write-Verbose "Path '$OutputPath' already exists"
     }
     if([string]::IsNullOrEmpty($Name)){
-        $CSVfilename = "$($OutputPath)Ews-Impersonation-Results.csv"
+        $CSVfilename = "$($OutputPath)Ews-Usage-Results.csv"
     }
     else{
-        $CSVfilename = "$($OutputPath)Ews-Impersonation-Results-$($Name).csv"
+        $CSVfilename = "$($OutputPath)Ews-Usage-Results-$($Name).csv"
     }
     if((Test-Path($CSVfilename)) -and $Operation -like "*Query*") {
         Remove-Item $CSVfilename -Confirm:$false -Force
@@ -1091,8 +1091,9 @@ function GetAppsWithApplicationPermissions {
     $Script:ApiPermissions = New-Object System.Collections.ArrayList
     $ExoSpn = $Script:ServicePrincipals | Where-Object {$_.appId -eq "00000002-0000-0ff1-ce00-000000000000"}
     $EwsAccessAsApp = ($ExoSpn.AppRoles | Where-Object {$_.Value -eq "full_access_as_app"}).Id
-    $Script:AadApplications = $Script:AadApplications | Where-Object {-not([string]::IsNullOrEmpty($_.requiredResourceAccess))}
+    
     foreach($application in $Script:AadApplications){
+        Write-Verbose "Checking application $($application.displayName) for EWS full_access_as_app permission..."
         foreach($r in $application.requiredResourceAccess) {
             if($r.ResourceAccess.Id -eq $EwsAccessAsApp){
                 $Script:AppPermission = [PSCustomObject]@{
@@ -1275,7 +1276,6 @@ switch($Operation) {
                             Write-Host "Attempting to get the audit log records for EWS usage." -ForegroundColor Cyan -NoNewline
                             # Retrieve 1000 records per request instead of the default 150
                             $r = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries/$($AuditQueryId)/records?`$top=1000" -AccessToken $Script:Token -Method GET -Endpoint beta
-                            # Filter the records for impersonation
                             $r.Content.value | Select-Object -ExpandProperty AuditData | Select-Object -ExcludeProperty "@odata.type", MailboxOwnerSid, AppAccessContext | Export-Csv $CSVfilename -NoTypeInformation
                             # Check if response includes more results link
                             while ($null -ne $r.Content.'@odata.nextLink') {
@@ -1317,7 +1317,6 @@ switch($Operation) {
 
         $Script:ApiPermissions | Export-Csv "$OutputPath\EWS-ApiPermissions-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
         
-        Write-Host "The following applications have permissions to access the EWS API: `n" -ForegroundColor Green
         $Apps = $Script:ApiPermissions | Sort-Object -Property ApplicationId -Unique | Select-Object ApplicationId,ApplicationDisplayName
         $AppActivity = New-Object System.Collections.ArrayList
         Write-Host "Checking the sign-in activity for the applications..." -ForegroundColor Green
