@@ -28,6 +28,12 @@ Then once this list of applications is discovered, a query for sign-in activity 
 .\Find-EwsUsage.ps1 -PermissionType Application -OAuthClientId 1d5cdea4-32e6-1234-a35a-cc443d697cab -OutputPath C:\Temp\Output\ -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -OAuthCertificate 67DCA626D48EE1626623FF26E6C8D856262D1DDC -CertificateStore CurrentUser -Operation GetAppUsage -QueryType signInLogs -Name ExchangeServerApp -AppId 61b01baf-f6f5-40ec-946b-e3491855fca8 -StartDate (Get-Date).AddDays(-2) -EndDate (Get-Date) -Interval 4
 ```
 
+### User license report
+A report can also be generated to identify EWS Access for Kiosk / Frontline Worker licensed users. The CSV from the GetAppUsage SignInLogs results is used to capture this report.
+```powershell
+.\Find-EwsUsage.ps1 -OutputPath C:\Temp\Output -OAuthCertificate 67DCA626D48EE1626623FF26E6C8D856262D1DDC -CertificateStore CurrentUser -OAuthClientId 1d5cdea4-32e6-1234-a35a-cc443d697cab -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -PermissionType Application -Operation GetUserLicenses -AppSignInCsv C:\Temp\Output\86277a5c-d649-46fc-8bf6-48e2a684624b-SignInEvents-20260113081449.csv
+```
+
 ## Audit logs
 When using the audit logs, this script must be run a minimum of three times to get the report. Each run requires a different value for the AuditQueryStep parameter. Here's a high-level overview of the the steps and what they do:
 
@@ -91,7 +97,12 @@ Step 3: Retrieve the list of records from the audit log query:
 
 **AppId** - The AppId parameter specifies the application ID used for the usage report.
 
+**AppUsageSignInCsv** - The AppUsageSignInCsv parameter specifies the path to the CSV file with the sign-in logs for the application.
+
 **Operation** - The Operation parameter specifies the operation the script should perform.
+    GetEwsActivity - checks for ServicePrincipalName activity for applications with EWS permissions
+    GetAppUsage - checks either Sign-in logs or Audit logs for EWS application usage
+    GetUserLicenses - retrieves the license for a user that provides Exchange capabilities
 
 **AuditQueryStep** - The AuditQueryStep parameter specifies the step in the AuditQuery the script should perform.
     NewAuditQuery - creates a new audit query for Exchange events
