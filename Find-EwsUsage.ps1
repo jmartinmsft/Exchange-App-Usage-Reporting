@@ -59,10 +59,14 @@ param (
     [Parameter(ParameterSetName="AppUsage",Mandatory=$False,HelpMessage="The AppId parameter specifies the application ID.")]
     [string]$AppId,
 
+    [ValidateScript({ Test-Path $_ })]
+    [Parameter(Mandatory=$false,HelpMessage="The AppUsageSignInCsv parameter specifies the path to the CSV file with the sign-in logs for the application.")]
+    [string]$AppUsageSignInCsv,
+
     [Parameter(ParameterSetName="AppUsage",Mandatory=$False,HelpMessage="The AuditQueryId parameter specifies the query ID.")]
     [string]$AuditQueryId,
 
-    [Parameter(Mandatory=$true,HelpMessage="The Operation parameter specifies the operation the script should perform.")] [ValidateSet("GetEwsActivity","GetAppUsage")]
+    [Parameter(Mandatory=$true,HelpMessage="The Operation parameter specifies the operation the script should perform.")] [ValidateSet("GetEwsActivity","GetAppUsage","GetUserLicenses")]
     [string]$Operation = $null,
 
     [Parameter(Mandatory=$false,HelpMessage="The Operation parameter specifies the operation the script should perform.")] [ValidateSet("NewAuditQuery", "CheckAuditQuery","GetQueryResults")]
@@ -1359,5 +1363,41 @@ switch($Operation) {
         }
         catch{}
         exit
+    }
+    "GetUserLicenses"{
+        $CurrentProgress = $ProgressPreference
+        $ProgressPreference = "Continue"
+        $CurrentView = $PSStyle.Progress.View
+        try { $PSStyle.Progress.View = "Classic" }
+        catch { $CurrentView = $null }
+        $x = 1
+
+        $Scope= @("User.Read.All")
+        Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
+        Write-Host "Getting assigned licenses to the users..." -ForegroundColor Green
+        $users = ((Import-Csv -Path $AppUsageSignInCsv).UserPrincipalName | Sort-Object -Unique)
+        $licenseDetails = New-Object System.Collections.ArrayList
+        foreach($Mailbox in $users){
+            Write-Progress -Activity "Getting license information for users" -CurrentOperation "Processing $($Mailbox)" -PercentComplete (($x / $users.Count) * 100)
+            $Query = "users/$($Mailbox)/licenseDetails"
+            $results = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $APIResource
+            foreach($s in $results.content.value){
+                if($s.servicePlans -match 'EXCHANGE'){
+                    $licenseInfo = [PSCustomObject]@{
+                        UserPrincipalName = $Mailbox
+                        SkuPartNumber = $s.SkuPartNumber
+                    }
+                    $licenseDetails.Add($licenseInfo) | Out-Null
+                }
+            }
+            $x++
+        }
+        $licenseDetails | Out-GridView -Title "User License Details"
+        $licenseDetails | Export-Csv "$OutputPath\User-License-Details-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
+        $ProgressPreference = $CurrentProgress
+        try{
+            $PSStyle.Progress.View = $CurrentView
+        }
+        catch{}
     }
 }
