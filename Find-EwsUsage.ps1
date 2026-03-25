@@ -22,7 +22,7 @@
     SOFTWARE
 #>
 
-# Version 20250519.1632
+# Version 20260325.0721
 [CmdletBinding(DefaultParameterSetName = '__AllParameterSets')]
 param (
     [ValidateScript({ Test-Path $_ })]
@@ -1052,25 +1052,25 @@ function GetAzureAdApplications{
             $Script:AadApplications.Add($application) | Out-Null
         }
     }
-    $Script:AadApplications | Export-Csv "$OutputPath\EntraAppRegistrations-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
+    $Script:AadApplications | ConvertTo-Json -Depth 6 | Out-File -FilePath "$OutputPath\EntraAppRegistrations-$((Get-Date).ToString("yyyyMMddhhmmss")).json" -Encoding UTF8
 }
 
 function GetAzureAdServicePrincipals{
     Write-Host "Getting a list of all Entra service applications..." -ForegroundColor Green
-    $Script:ServicePrincipals = New-Object System.Collections.ArrayList
+    $Global:ServicePrincipals = New-Object System.Collections.ArrayList
     $ServicePrincipalsResults = Invoke-GraphApiRequest -Query "servicePrincipals?`$select=id,appDisplayName,appDescription,appId,createdDateTime,displayName,servicePrincipalType,appRoles,oauth2PermissionScopes" -AccessToken $Script:Token -GraphApiUrl $APIResource
     foreach($ServicePrincipal in $ServicePrincipalsResults.Content.Value) {
-        $Script:ServicePrincipals.Add($ServicePrincipal) | Out-Null
+        $Global:ServicePrincipals.Add($ServicePrincipal) | Out-Null
     }
     # Check if response includes more results link
     while($null -ne $ServicePrincipalsResults.Content.'@odata.nextLink') {
         $Query = $ServicePrincipalsResults.Content.'@odata.nextLink'.Substring($ServicePrincipalsResults.Content.'@odata.nextLink'.IndexOf("servicePrincipals"))
         $ServicePrincipalsResults = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $APIResource
         foreach($ServicePrincipal in $ServicePrincipalsResults.Content.Value){
-            $Script:ServicePrincipals.Add($ServicePrincipal) | Out-Null
+            $Global:ServicePrincipals.Add($ServicePrincipal) | Out-Null
         }
     }
-    $Script:ServicePrincipals | Export-Csv "$OutputPath\EntraServicePrincipals-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
+    $Global:ServicePrincipals | ConvertTo-Json -Depth 6 | Out-File -FilePath "$OutputPath\EntraServicePrincipals-$((Get-Date).ToString("yyyyMMddhhmmss")).json" -Encoding UTF8
 }
 
 function GetAzureAdOauth2PermissionGrants{
@@ -1088,12 +1088,12 @@ function GetAzureAdOauth2PermissionGrants{
             $Script:Oauth2PermissionGrants.Add($Oauth2PermissionGrant) | Out-Null
         }
     }
-    $Script:Oauth2PermissionGrants | Export-Csv "$OutputPath\Oauth2PermissionGrants-$((Get-Date).ToString("yyyyMMddhhmmss")).csv" -NoTypeInformation
+    $Script:Oauth2PermissionGrants | ConvertTo-Json -Depth 6 | Out-File -FilePath "$OutputPath\Oauth2PermissionGrants-$((Get-Date).ToString("yyyyMMddhhmmss")).json" -Encoding UTF8
 }
 
 function GetAppsWithApplicationPermissions {
     $Script:ApiPermissions = New-Object System.Collections.ArrayList
-    $ExoSpn = $Script:ServicePrincipals | Where-Object {$_.appId -eq "00000002-0000-0ff1-ce00-000000000000"}
+    $ExoSpn = $Global:ServicePrincipals | Where-Object {$_.appId -eq "00000002-0000-0ff1-ce00-000000000000"}
     $EwsAccessAsApp = ($ExoSpn.AppRoles | Where-Object {$_.Value -eq "full_access_as_app"}).Id
     
     foreach($application in $Script:AadApplications){
@@ -1105,7 +1105,7 @@ function GetAppsWithApplicationPermissions {
                             'ApplicationID'           = $application.appId
                             'PermissionType'          = "Application"
                             'PermissionValue'         = "full_access_as_app"
-                            'ResourceDisplayName'     = $application.RequiredResourceAccess.ResourceAppId
+                            'ResourceId'              = $r.ResourceAppId
                         }
                         $Script:ApiPermissions.Add($Script:AppPermission) | Out-Null
             }
@@ -1117,13 +1117,13 @@ function GetAppsByOAuthPermissionGrant{
     Write-Host "Getting application IDs for applications that have the EWS.AccessAsUser.All permission..." -ForegroundColor Green
     foreach($Oauth2PermissionGrant in $Script:Oauth2PermissionGrants) {
         if($Oauth2PermissionGrant.scope -like "*EWS.AccessAsUser.All*") {
-            $AadApplicationResults = $Script:ServicePrincipals | Where-Object {$_.Id -eq $Oauth2PermissionGrant.clientId}
+            $AadApplicationResults = $Global:ServicePrincipals | Where-Object {$_.Id -eq $Oauth2PermissionGrant.clientId}
             $Script:AppPermission = [PSCustomObject]@{
                     'ApplicationDisplayName'  = $AadApplicationResults.displayName
                     'ApplicationID'           = $AadApplicationResults.appId
                     'PermissionType'          = "Delegate"
                     'PermissionValue'         = "EWS.AccessAsUser.All"
-                    'ResourceDisplayName'     = $Oauth2PermissionGrant.resourceId
+                    'ResourceId'              = $Oauth2PermissionGrant.resourceId
             }
             $Script:ApiPermissions.Add($Script:AppPermission) | Out-Null
         }
@@ -1344,6 +1344,7 @@ switch($Operation) {
                 }
             }
             else{
+                Write-Verbose $q
                 $SpActivity = [PSCustomObject]@{
                     AppId = $q.Content.value.appId
                     Application = $App.ApplicationDisplayName
