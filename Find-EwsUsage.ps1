@@ -22,7 +22,7 @@
     SOFTWARE
 #>
 
-# Version 20260327.0815
+# Version 20260327.0901
 [CmdletBinding(DefaultParameterSetName = '__AllParameterSets')]
 param (
     [ValidateScript({ Test-Path $_ })]
@@ -1365,23 +1365,29 @@ switch($Operation) {
         foreach($App in $Apps){
             Write-Progress -Activity "Getting sign-in activity for service principals" -CurrentOperation "Processing $($App.ApplicationDisplayName)" -PercentComplete (($x / $TotalApps) * 100)
             $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "reports/servicePrincipalSignInActivities?`$filter=appId eq '$($App.ApplicationId)'" -AccessToken $Script:Token -Endpoint beta
-            if([string]::IsNullOrEmpty($q.Content.value.appId)){
+            # Check if the request was successful and if there is sign-in activity for the application
+            if($q.response.StatusCode -eq 200){
+                if([string]::IsNullOrEmpty($q.Content.value.appId)){
                 $SpActivity = [PSCustomObject]@{
                     AppId = $App.ApplicationId
                     Application = $App.ApplicationDisplayName
                     LastSignIn =  "None"
                 }
-            }
-            else{
+                }
+                else{
                 Write-Verbose $q
                 $SpActivity = [PSCustomObject]@{
                     AppId = $q.Content.value.appId
                     Application = $App.ApplicationDisplayName
                     LastSignIn =  $q.Content.value.lastSignInActivity.LastSignInDateTime
                 }
+                }
+                $AppActivity.Add($SpActivity) | Out-Null
+                $x++
             }
-            $AppActivity.Add($SpActivity) | Out-Null
-            $x++
+            else{
+                Write-Host "Failed to get sign-in activity for $($App.ApplicationDisplayName)" -ForegroundColor Yellow
+            }
         }
         Write-Host "The following applications have sign-in activity: `n" -ForegroundColor Green
         
