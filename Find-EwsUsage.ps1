@@ -22,7 +22,7 @@
     SOFTWARE
 #>
 
-# Version 20260325.0721
+# Version 20260327.0815
 [CmdletBinding(DefaultParameterSetName = '__AllParameterSets')]
 param (
     [ValidateScript({ Test-Path $_ })]
@@ -1055,6 +1055,31 @@ function GetAzureAdApplications{
     $Script:AadApplications | ConvertTo-Json -Depth 6 | Out-File -FilePath "$OutputPath\EntraAppRegistrations-$((Get-Date).ToString("yyyyMMddhhmmss")).json" -Encoding UTF8
 }
 
+function GetAppRoleAssignments{
+    #Loop throught the discovered app registrations and get the app role assignments for each of them
+    Write-Host "Getting app role assignments for each Entra App registration..." -ForegroundColor Green
+    $ewsPermissionId = 'dc890d15-9560-4a4c-9b7f-a736ec74ec40' # This is the app role ID for the full_access_as_app permission
+    $Script:AppRoleAssignments = New-Object System.Collections.ArrayList
+    foreach($application in $Script:AadApplications){
+        $Global:AppRoleAssignedToResults = Invoke-GraphApiRequest -Query "servicePrincipals(appId='$($application.appId)')/appRoleAssignments" -AccessToken $Script:Token -GraphApiUrl $APIResource
+        foreach($appRoleAssignment in $Global:AppRoleAssignedToResults.Content.Value) {
+            $Script:AppRoleAssignments.Add($appRoleAssignment) | Out-Null
+            if($appRoleAssignment.appRoleId -eq $ewsPermissionId) {
+                Write-Verbose "Application $($application.displayName) has the EWS full_access_as_app permission"
+                $Script:AppPermission = [PSCustomObject]@{
+                            'ApplicationDisplayName'  = $application.displayName
+                            'ApplicationID'           = $application.appId
+                            'PermissionType'          = "Application"
+                            'PermissionValue'         = "full_access_as_app"
+                            'ResourceId'              = $r.ResourceAppId
+                        }
+                $Script:ApiPermissions.Add($Script:AppPermission) | Out-Null
+            }
+        }
+    }
+    $Script:AppRoleAssignments | ConvertTo-Json -Depth 6 | Out-File -FilePath "$OutputPath\AppRoleAssignments-$((Get-Date).ToString("yyyyMMddhhmmss")).json" -Encoding UTF8
+}
+
 function GetAzureAdServicePrincipals{
     Write-Host "Getting a list of all Entra service applications..." -ForegroundColor Green
     $Global:ServicePrincipals = New-Object System.Collections.ArrayList
@@ -1092,7 +1117,7 @@ function GetAzureAdOauth2PermissionGrants{
 }
 
 function GetAppsWithApplicationPermissions {
-    $Script:ApiPermissions = New-Object System.Collections.ArrayList
+    
     $ExoSpn = $Global:ServicePrincipals | Where-Object {$_.appId -eq "00000002-0000-0ff1-ce00-000000000000"}
     $EwsAccessAsApp = ($ExoSpn.AppRoles | Where-Object {$_.Value -eq "full_access_as_app"}).Id
     
@@ -1303,9 +1328,13 @@ switch($Operation) {
     "GetEwsActivity"{
         $Scope= @("Application.Read.All","Directory.Read.All")
         Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
+        $Script:ApiPermissions = New-Object System.Collections.ArrayList
 
         # Call function to obtain list of app registrations from Entra
         GetAzureADApplications
+        
+        # Call function to obtain list of app role assignments from Entra
+        GetAppRoleAssignments
 
         # Call function to obtain list of service principals from Entra
         GetAzureAdServicePrincipals
