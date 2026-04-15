@@ -29,9 +29,14 @@ Then once this list of applications is discovered, a query for sign-in activity 
 ```
 
 ### User license report
-A report can also be generated to identify EWS Access for Kiosk / Frontline Worker licensed users. The CSV from the GetAppUsage SignInLogs results is used to capture this report.
+A report can be generated to help identify EWS Access for Kiosk / Frontline Worker licensed users. The CSV from the GetAppUsage SignInLogs results is used to capture this report.
 ```powershell
 .\Find-EwsUsage.ps1 -OutputPath C:\Temp\Output -OAuthCertificate 67DCA626D48EE1626623FF26E6C8D856262D1DDC -CertificateStore CurrentUser -OAuthClientId 1d5cdea4-32e6-1234-a35a-cc443d697cab -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -PermissionType Application -Operation GetUserLicenses -AppSignInCsv C:\Temp\Output\86277a5c-d649-46fc-8bf6-48e2a684624b-SignInEvents-20260113081449.csv
+```
+
+A report can also be generated to help identify applications accessing Kiosk / Frontline Worker licensed users. The CSV from the GetAppUsage AuditLogs results is used to capture this report.
+```powershell
+.\Find-EwsUsage.ps1 -OutputPath C:\Temp\Output -OAuthCertificate 67DCA626D48EE1626623FF26E6C8D856262D1DDC -CertificateStore CurrentUser -OAuthClientId 1d5cdea4-32e6-1234-a35a-cc443d697cab -OAuthTenantId 9101fc97-5be5-4438-a1d7-83e051e52057 -PermissionType Application -Operation GetUserLicenses -EwsUsageAuditLogCsv C:\Temp\Output\Ews-Usage-Results-Demo.csv
 ```
 
 ## Audit logs
