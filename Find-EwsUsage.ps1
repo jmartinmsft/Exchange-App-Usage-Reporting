@@ -63,6 +63,10 @@ param (
     [Parameter(Mandatory=$false,HelpMessage="The AppUsageSignInCsv parameter specifies the path to the CSV file with the sign-in logs for the application.")]
     [string]$AppUsageSignInCsv,
 
+    [ValidateScript({ Test-Path $_ })]
+    [Parameter(Mandatory=$false,HelpMessage="The EwsUsageAuditLogCsv parameter specifies the path to the CSV file with the EWS usage audit logs for the application.")]
+    [string]$EwsUsageAuditLogCsv,
+
     [Parameter(ParameterSetName="AppUsage",Mandatory=$False,HelpMessage="The AuditQueryId parameter specifies the query ID.")]
     [string]$AuditQueryId,
 
@@ -1411,7 +1415,16 @@ switch($Operation) {
         $Scope= @("User.Read.All")
         Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
         Write-Host "Getting assigned licenses to the users..." -ForegroundColor Green
-        $users = ((Import-Csv -Path $AppUsageSignInCsv).UserPrincipalName | Sort-Object -Unique)
+        if(-not([string]::IsNullOrEmpty($AppUsageSignInCsv))) {
+            $users = ((Import-Csv -Path $AppUsageSignInCsv).UserPrincipalName | Sort-Object -Unique)
+        }
+        elseif (-not([string]::IsNullOrEmpty($EwsUsageAuditLogCsv))) {
+            $users = ((Import-Csv -Path $EwsUsageAuditLogCsv).MailboxOwnerUPN | Sort-Object -Unique)
+        }
+        else {
+            Write-Host "No input CSV provided. Please provide a CSV file with user principal names to get license details." -ForegroundColor Red
+            exit
+        }
         $licenseDetails = New-Object System.Collections.ArrayList
         foreach($Mailbox in $users){
             Write-Progress -Activity "Getting license information for users" -CurrentOperation "Processing $($Mailbox)" -PercentComplete (($x / $users.Count) * 100)
