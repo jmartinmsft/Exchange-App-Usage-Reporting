@@ -1195,18 +1195,28 @@ switch($Operation) {
     "GetAppUsage"{
         switch($QueryType){
             "SignInLogs"{
+                if($StartDate -ge $EndDate){
+                    Write-Error "StartDate must be earlier than EndDate."
+                    exit
+                }
                 $Scope= @("AuditLog.Read.All")
                 Get-OAuthToken -AppScope $Scope -ApiEndpoint $APIResource
                 Write-Host "Searching sign-in logs for the application $($AppId)..." -ForegroundColor Green
                 $OutputFile = "$OutputPath\$($AppId)-SignInEvents-$((Get-Date).ToString("yyyyMMddhhmmss")).csv"
                 
                 # Breaking down the sign-in logs requests to hour intervals
+                # Set StartTime to the beginning of the interval so the loop can increment hourly
                 $StartTime = $StartDate
+                # Loop through each hour interval between StartDate and EndDate
                 while ($StartTime -lt $EndDate) {
+                    # Set EndTime to an hour past the StartTime
                     $EndTime = $StartTime.AddHours($Interval)
+                    # Ensure EndTime does not exceed EndDate
                     if ($EndTime -gt $EndDate) {
+                        Write-Verbose "EndTime exceeds EndDate, setting EndTime to EndDate"
                         $EndTime = $EndDate
                     }
+                    # Convert StartTime and EndTime to UTC for the query and set format
                     $EndTime = $EndTime.ToUniversalTime()
                     $StartTime = $StartTime.ToUniversalTime()
                     $EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
@@ -1221,6 +1231,7 @@ switch($Operation) {
                     $Query = "auditLogs/signIns?`$filter=createdDateTime ge $StartSearch and createdDateTime le $EndSearch and appId eq '$($AppId)' and (signInEventTypes/any(t:t eq 'interactiveUser') or signInEventTypes/any(t:t eq 'nonInteractiveUser') or signInEventTypes/any(t:t eq 'servicePrincipal'))"
                     $Script:SignInEvents = New-Object System.Collections.ArrayList
                     $results = Invoke-GraphApiRequest -Query $Query -AccessToken $Script:Token -GraphApiUrl $APIResource -Endpoint beta
+                    Write-Verbose "Found $($results.Content.Value.Count) sign-in events for the application $($AppId) between $($StartSearch) and $($EndSearch)"
                     foreach($r in $results.Content.Value){
                         New-Object -TypeName PSCustomObject -Property @{
                             CreatedDateTime = $r.createdDateTime
@@ -1256,9 +1267,9 @@ switch($Operation) {
 
                 # Display the results in a grid view
                 if(Test-Path $OutputFile) {
-                    Import-Csv $OutputFile | Group-Object -Property userPrincipalName,signInEventTypes,appDisplayName | Select-Object Count,@{n='UPN';e={$_.Group[0].userPrincipalName}},@{n='AppId';e={$_.Group[0].AppId}},@{n='signInEventType';e={$_.Group[0].signInEventTypes}},@{n='appDisplayName';e={$_.Group[0].appDisplayName}} | Sort-Object Count -Descending | Out-GridView -Title "EWS Application Results"
+                    Import-Csv $OutputFile | Group-Object -Property @{Expression={[datetime]$_.CreatedDateTime | Get-Date -Format "yyyy-MM-dd"}},userPrincipalName,signInEventTypes,appDisplayName | Select-Object Count,@{n='Date';e={$_.Group[0].CreatedDateTime | Get-Date -Format "yyyy-MM-dd"}},@{n='UPN';e={$_.Group[0].userPrincipalName}},@{n='AppId';e={$_.Group[0].AppId}},@{n='signInEventType';e={$_.Group[0].signInEventTypes}},@{n='appDisplayName';e={$_.Group[0].appDisplayName}} | Sort-Object Date -Descending | Out-GridView -Title "EWS Application Results"
                 }
-
+                # Restore the original progress view and preference
                 if(-not([string]::IsNullOrEmpty($CurrentView))){
                     $PSStyle.Progress.View = $CurrentView
                 }
@@ -1314,7 +1325,7 @@ switch($Operation) {
                             while ($null -ne $r.Content.'@odata.nextLink') {
                                 $Query = $r.Content.'@odata.nextLink'.Substring($r.Content.'@odata.nextLink'.IndexOf("security"))
                                 $r = Invoke-GraphApiRequest -GraphApiUrl $cloudService.graphApiEndpoint -AccessToken $Script:Token -Query $Query -Endpoint beta
-                                $r.Content.value | Select-Object -ExpandProperty AuditData | Select-Object -ExcludeProperty "@odata.type", MailboxOwnerSid, AppAccessContext | Export-Csv $CSVfilename -NoTypeInformation
+                                $r.Content.value | Select-Object -ExpandProperty AuditData | Select-Object -ExcludeProperty "@odata.type", MailboxOwnerSid, AppAccessContext | Export-Csv $CSVfilename -NoTypeInformation -Append
                                 Write-Host "." -NoNewline
                             }
                             #Export results to CSV
