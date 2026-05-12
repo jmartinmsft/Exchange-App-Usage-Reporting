@@ -22,7 +22,7 @@
     SOFTWARE
 #>
 
-# Version 20260327.0901
+# Version 20260512.1550
 [CmdletBinding(DefaultParameterSetName = '__AllParameterSets')]
 param (
     [ValidateScript({ Test-Path $_ })]
@@ -73,7 +73,7 @@ param (
     [Parameter(Mandatory=$true,HelpMessage="The Operation parameter specifies the operation the script should perform.")] [ValidateSet("GetEwsActivity","GetAppUsage","GetUserLicenses")]
     [string]$Operation = $null,
 
-    [Parameter(Mandatory=$false,HelpMessage="The Operation parameter specifies the operation the script should perform.")] [ValidateSet("NewAuditQuery", "CheckAuditQuery","GetQueryResults")]
+    [Parameter(Mandatory=$false,HelpMessage="The Operation parameter specifies the operation the script should perform.")] [ValidateSet("NewAuditQuery", "CheckAuditQuery","GetQueryResults","ListAuditQueries")]
     [string]$AuditQueryStep = $null,
 
     [Parameter(ParameterSetName="AppUsage",Mandatory=$true,HelpMessage="The QueryType parameter specifies the type of query for EWS usage.")] [ValidateSet("SignInLogs","AuditLogs")]
@@ -754,7 +754,17 @@ function Invoke-WebRequestWithProxyDetection {
     try {
         Invoke-WebRequest @params
     } catch {
-        Write-VerboseErrorInformation
+        #Write-VerboseErrorInformation
+        $response = $_.Exception.Response
+        $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+        $responseContent = ($reader.ReadToEnd() | ConvertFrom-Json)
+        Write-Verbose "Response Content: $($responseContent.error.message)"
+        return [PSCustomObject]@{
+            ErrorCode    = $responseContent.error.code
+            ErrorMessage   = $responseContent.error.message
+            StatusCode = $response.StatusCode
+            Successful = $false
+        }
     }
 }
 
@@ -1042,9 +1052,16 @@ function getFileName{
 }
 
 function GetAzureAdApplications{
-    Write-Host "Getting a list of Entra App registrations..." -ForegroundColor Green
+    Write-Host "Getting a list of Entra App registrations..." -ForegroundColor Green -NoNewline
     $Script:AadApplications = New-Object System.Collections.ArrayList
     $AadApplicationResults = Invoke-GraphApiRequest -Query "applications?`$select=appId,createdDateTime,displayName,description,notes,requiredResourceAccess" -AccessToken $Script:Token -GraphApiUrl $APIResource
+    if($AadApplicationResults.Successful -eq $false) {
+        Write-Host "FAILED" -ForegroundColor Red
+        Write-Host "Unable to get a list of Entra App registrations. Please review the error message below and re-run the script:" -ForegroundColor Red
+        Write-Host $AadApplicationResults.Response.ErrorMessage -ForegroundColor Red
+        exit
+    }
+    Write-Host "OK"
     foreach($application in $AadApplicationResults.Content.Value){
         $Script:AadApplications.Add($application) | Out-Null
     }
@@ -1064,8 +1081,17 @@ function GetAppRoleAssignments{
     Write-Host "Getting app role assignments for each Entra App registration..." -ForegroundColor Green
     $ewsPermissionId = 'dc890d15-9560-4a4c-9b7f-a736ec74ec40' # This is the app role ID for the full_access_as_app permission
     $Script:AppRoleAssignments = New-Object System.Collections.ArrayList
+    $appCount = $Script:AadApplications.Count
+    $appIndex = 0
     foreach($application in $Script:AadApplications){
+        $appIndex++
+        Write-Progress -Activity "Getting app role assignments" -Status "Processing application $appIndex of $appCount" -PercentComplete (($appIndex / $appCount) * 100)
         $Global:AppRoleAssignedToResults = Invoke-GraphApiRequest -Query "servicePrincipals(appId='$($application.appId)')/appRoleAssignments" -AccessToken $Script:Token -GraphApiUrl $APIResource
+        if($Global:AppRoleAssignedToResults.Successful -eq $false) {
+            Write-Host "Unable to get app role assignments for application $($application.displayName). Please review the error message below and re-run the script:" -ForegroundColor Red
+            Write-Host $Global:AppRoleAssignedToResults.Response.ErrorMessage -ForegroundColor Red
+            exit
+        }
         foreach($appRoleAssignment in $Global:AppRoleAssignedToResults.Content.Value) {
             $Script:AppRoleAssignments.Add($appRoleAssignment) | Out-Null
             if($appRoleAssignment.appRoleId -eq $ewsPermissionId) {
@@ -1085,9 +1111,16 @@ function GetAppRoleAssignments{
 }
 
 function GetAzureAdServicePrincipals{
-    Write-Host "Getting a list of all Entra service applications..." -ForegroundColor Green
+    Write-Host "Getting a list of all Entra service principals..." -ForegroundColor Green -NoNewline
     $Global:ServicePrincipals = New-Object System.Collections.ArrayList
     $ServicePrincipalsResults = Invoke-GraphApiRequest -Query "servicePrincipals?`$select=id,appDisplayName,appDescription,appId,createdDateTime,displayName,servicePrincipalType,appRoles,oauth2PermissionScopes" -AccessToken $Script:Token -GraphApiUrl $APIResource
+    if($ServicePrincipalsResults.Successful -eq $false){
+        Write-Host "FAILED" -ForegroundColor Red
+        Write-Host "Unable to get a list of Entra service principals. Please review the error message below and re-run the script:" -ForegroundColor Red
+        Write-Host $ServicePrincipalsResults.Response.ErrorMessage -ForegroundColor Red
+        exit
+    }
+    Write-Host "OK"
     foreach($ServicePrincipal in $ServicePrincipalsResults.Content.Value) {
         $Global:ServicePrincipals.Add($ServicePrincipal) | Out-Null
     }
@@ -1103,9 +1136,16 @@ function GetAzureAdServicePrincipals{
 }
 
 function GetAzureAdOauth2PermissionGrants{
-    write-host "Getting a list of all Entra OAuth2 permission grants..." -ForegroundColor Green
+    write-host "Getting a list of all Entra OAuth2 permission grants..." -ForegroundColor Green -NoNewline
     $Script:Oauth2PermissionGrants = New-Object System.Collections.ArrayList
     $Oauth2PermissionGrantsResults = Invoke-GraphApiRequest -Query "oauth2PermissionGrants?`$select=clientId,scope,resourceId" -AccessToken $Script:Token -GraphApiUrl $APIResource
+    if($Oauth2PermissionGrantsResults.Successful -eq $false){
+        Write-Host "FAILED" -ForegroundColor Red
+        Write-Host "Unable to get a list of Entra OAuth2 permission grants. Please review the error message below and re-run the script:" -ForegroundColor Red
+        Write-Host $Oauth2PermissionGrantsResults.Response.ErrorMessage -ForegroundColor Red
+        exit
+    }
+    Write-Host "OK"
     foreach($Oauth2PermissionGrant in $Oauth2PermissionGrantsResults.Content.Value) {
         $Script:Oauth2PermissionGrants.Add($Oauth2PermissionGrant) | Out-Null
     }
@@ -1143,7 +1183,8 @@ function GetAppsWithApplicationPermissions {
 }
 
 function GetAppsByOAuthPermissionGrant{
-    Write-Host "Getting application IDs for applications that have the EWS.AccessAsUser.All permission..." -ForegroundColor Green
+    Write-Host "Getting application IDs for applications that have the EWS.AccessAsUser.All permission..." -ForegroundColor Green -NoNewline
+    [int]$delegateApps = 0
     foreach($Oauth2PermissionGrant in $Script:Oauth2PermissionGrants) {
         if($Oauth2PermissionGrant.scope -like "*EWS.AccessAsUser.All*") {
             $AadApplicationResults = $Global:ServicePrincipals | Where-Object {$_.Id -eq $Oauth2PermissionGrant.clientId}
@@ -1155,8 +1196,12 @@ function GetAppsByOAuthPermissionGrant{
                     'ResourceId'              = $Oauth2PermissionGrant.resourceId
             }
             $Script:ApiPermissions.Add($Script:AppPermission) | Out-Null
+            $delegateApps++
         }
     }
+    Write-Host "OK"
+    Write-Host "Found $delegateApps applications with the EWS.AccessAsUser.All permission" -ForegroundColor Yellow
+    Write-Host "These applications should be reviewed for sign-in activity to determine frontline/kiosk license activity." -ForegroundColor Yellow
 }
 
 function CreateAuditQuery{
@@ -1334,6 +1379,11 @@ switch($Operation) {
                         else {
                             Write-Host "Audit query did not complete successfully. Check query status for more information." -ForegroundColor Yellow
                         }
+                    }
+                    "ListAuditQueries" {
+                        Write-Host "Getting a list of all audit queries..." -ForegroundColor Cyan
+                        $q = Invoke-GraphApiRequest -GraphApiUrl $APIResource -Query "security/auditLog/queries" -AccessToken $Script:Token -Method GET -Endpoint beta
+                        $q.Content.value | Format-Table id, displayName, status, filterStartDateTime, filterEndDateTime, keywordFilter
                     }
                 }
                 
