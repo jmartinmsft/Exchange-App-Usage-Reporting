@@ -1090,7 +1090,7 @@ function GetAppRoleAssignments{
         if($Global:AppRoleAssignedToResults.Successful -eq $false) {
             Write-Host "Unable to get app role assignments for application $($application.displayName). Please review the error message below and re-run the script:" -ForegroundColor Red
             Write-Host $Global:AppRoleAssignedToResults.Response.ErrorMessage -ForegroundColor Red
-            exit
+            break
         }
         foreach($appRoleAssignment in $Global:AppRoleAssignedToResults.Content.Value) {
             $Script:AppRoleAssignments.Add($appRoleAssignment) | Out-Null
