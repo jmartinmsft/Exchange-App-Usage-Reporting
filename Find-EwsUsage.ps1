@@ -1251,19 +1251,18 @@ switch($Operation) {
                 
                 # Breaking down the sign-in logs requests to hour intervals
                 # Set StartTime to the beginning of the interval so the loop can increment hourly
-                $StartTime = $StartDate
+                $StartTime = $StartDate.ToUniversalTime()
+                $QueryEndTime = $EndDate.ToUniversalTime()
                 # Loop through each hour interval between StartDate and EndDate
-                while ($StartTime -lt $EndDate) {
+                while ($StartTime -lt $QueryEndTime) {
                     # Set EndTime to an hour past the StartTime
                     $EndTime = $StartTime.AddHours($Interval)
                     # Ensure EndTime does not exceed EndDate
-                    if ($EndTime -gt $EndDate) {
+                    if ($EndTime -gt $QueryEndTime) {
                         Write-Verbose "EndTime exceeds EndDate, setting EndTime to EndDate"
-                        $EndTime = $EndDate
+                        $EndTime = $QueryEndTime
                     }
-                    # Convert StartTime and EndTime to UTC for the query and set format
-                    $EndTime = $EndTime.ToUniversalTime()
-                    $StartTime = $StartTime.ToUniversalTime()
+                    # Format the UTC interval for the query
                     $EndSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $EndTime
                     $StartSearch = '{0:yyyy-MM-ddTHH:mm:ssZ}' -f $StartTime
                     $CurrentProgress = $ProgressPreference
