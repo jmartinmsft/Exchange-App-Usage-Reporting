@@ -1183,16 +1183,21 @@ function GetAppsWithApplicationPermissions {
 }
 
 function GetAppsByOAuthPermissionGrant{
-    Write-Host "Getting application IDs for applications that have the EWS.AccessAsUser.All permission..." -ForegroundColor Green -NoNewline
+    $delegatedEwsPermissions = @("EWS.AccessAsUser.All", "full_access_as_user")
+    Write-Host "Getting application IDs for applications that have delegated EWS permissions..." -ForegroundColor Green -NoNewline
     [int]$delegateApps = 0
     foreach($Oauth2PermissionGrant in $Script:Oauth2PermissionGrants) {
-        if($Oauth2PermissionGrant.scope -like "*EWS.AccessAsUser.All*") {
+        $grantedScopes = $Oauth2PermissionGrant.scope -split '\s+'
+        foreach($delegatedEwsPermission in $delegatedEwsPermissions) {
+            if($grantedScopes -notcontains $delegatedEwsPermission) {
+                continue
+            }
             $AadApplicationResults = $Global:ServicePrincipals | Where-Object {$_.Id -eq $Oauth2PermissionGrant.clientId}
             $Script:AppPermission = [PSCustomObject]@{
                     'ApplicationDisplayName'  = $AadApplicationResults.displayName
                     'ApplicationID'           = $AadApplicationResults.appId
                     'PermissionType'          = "Delegate"
-                    'PermissionValue'         = "EWS.AccessAsUser.All"
+                    'PermissionValue'         = $delegatedEwsPermission
                     'ResourceId'              = $Oauth2PermissionGrant.resourceId
             }
             $Script:ApiPermissions.Add($Script:AppPermission) | Out-Null
@@ -1200,7 +1205,7 @@ function GetAppsByOAuthPermissionGrant{
         }
     }
     Write-Host "OK"
-    Write-Host "Found $delegateApps applications with the EWS.AccessAsUser.All permission" -ForegroundColor Yellow
+    Write-Host "Found $delegateApps delegated EWS permission grants" -ForegroundColor Yellow
     Write-Host "These applications should be reviewed for sign-in activity to determine frontline/kiosk license activity." -ForegroundColor Yellow
 }
 
@@ -1227,7 +1232,7 @@ function CreateAuditQuery{
 }
 
 #Define variables
-$Script:EWSPermissions = @("EWS.AccessAsUser.All", "full_access_as_app")
+$Script:EWSPermissions = @("EWS.AccessAsUser.All", "full_access_as_user", "full_access_as_app")
 $cloudService = Get-CloudServiceEndpoint $AzureEnvironment
 $azureADEndpoint = $cloudService.AzureADEndpoint
 $Script:applicationInfo = @{
